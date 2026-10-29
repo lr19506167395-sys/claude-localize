@@ -1,0 +1,19 @@
+# 构建产物
+build/
+dist/
+*.egg-info/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 运行时数据（用户本地的备份/缓存，不入库）
+sources/backup/
+cache/
+
+# 注意：sources/custom/translated.json 是种子词表，随仓库分发，不要忽略
+
+# macOS
+.DS_Store

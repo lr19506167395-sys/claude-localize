@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-localize"
+version = "1.0.0"
+description = "Claude Desktop 中文界面补丁（macOS）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+classifiers = [
+    "Environment :: MacOS X",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Localization",
+]
+
+[project.urls]
+Homepage = "https://github.com/lr19506167395-sys/claude-localize"
+Changelog = "https://github.com/lr19506167395-sys/claude-localize/blob/main/CHANGELOG.md"
+
+[project.scripts]
+claude-localize = "claude_localize.cli:main"
+claude-localize-menubar = "claude_localize.menubar:main"
+
+[project.optional-dependencies]
+menubar = ["rumps"]
+
+[tool.setuptools.packages.find]
+include = ["claude_localize*"]
+
+[tool.setuptools.package-data]
+claude_localize = ["../packs/**/*"]
