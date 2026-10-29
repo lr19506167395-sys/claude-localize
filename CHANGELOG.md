@@ -32,5 +32,11 @@
 
 ### 致谢
 
-词表与 `Localizable.strings` 来自 [javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn)（MIT），
+本项目的思路、词表与部分实现来自
+[javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn)（MIT）：
+
+- 词表 / 硬编码替换表 / `Localizable.strings` 直接复用
+- 斜杠命令双语菜单**移植**自其 `patch_slash_command_menu`
+- 三重完整性同步、ad-hoc 重签、整包备份的实现**思路参考**自其脚本
+
 详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

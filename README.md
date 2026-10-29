@@ -4,6 +4,9 @@ Claude Desktop 中文界面补丁（macOS，简体中文）。
 
 不修改任何在线服务，只替换本地语言资源，并用 ad-hoc 重签名保证 Claude 能正常启动和自动更新。
 
+> 本项目基于 **[javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn)**（MIT）的
+> 词表与实现思路，详见下方[致谢与来源](#致谢与来源)。
+
 > **支持版本：Claude Desktop for macOS 4.29.0。** Claude 升级后布局可能变化，装之前先用
 > `claude-localize status` 确认版本。
 
@@ -188,8 +191,44 @@ env -u PYTHONHOME -u PYTHONPATH .venv/bin/python tools/isolated_verify.py
   内部改过的 JS（如双语斜杠菜单）属于内容替换，无法逐字还原，重装官方 Claude 可彻底清除
 - 在线页面兜底（DOM 注入）依赖英文原文匹配，官方改文案后可能出现少量漏翻
 
+## 致谢与来源
+
+本项目的思路、词表和部分实现来自 **[javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn)（MIT）**。
+没有它，这个项目不会存在。
+
+### 直接复用的部分
+
+| 内容 | 来源 | 说明 |
+|---|---|---|
+| 主界面 / 桌面壳层词表 | `resources/frontend-zh-CN.json` 等 | 随包分发，按 key 合并 |
+| 硬编码替换表 | `resources/frontend-hardcoded-zh-CN.json` | 3,919 条 |
+| `Localizable.strings` | `resources/Localizable.strings` | macOS 原生字符串 |
+| 斜杠命令双语菜单 | `scripts/patch_claude_zh_cn.py` 的 `patch_slash_command_menu` | **移植**：改用独立模块 `slashmenu.py`，并补上精确撤回 |
+| 动态词表 / statsig | `resources/dynamic-zh-CN.json` 等 | 随包分发 |
+
+### 参考了它的设计
+
+- **不碰 `app.asar` 的保守路线**（本项目做成可选开关）
+- **安装前整包备份 + ad-hoc 重签**，`identifier` 级 designated requirement 保证自动更新可用
+- **三重完整性同步**的思路（asar 条目 / `Info.plist` 哈希 / Framework 摘要槽）
+- **按 key 合并而非全量对齐**，新版新增文案回退英文而不是让补丁整体失效
+
+### 本项目新增的部分
+
+- 桌面壳层**语言白名单注册**（官方 zh-Hans 因此才被激活）
+- 桌面壳层增强**一键开关**
+- **备份分级**（官方原版 / 已汉化），支持零残留还原
+- 翻译校验（占位符 / ICU / HTML）与**手动锁定**
+- 残留清理、隔离验证工具、100 个单元测试
+
+原始 MIT 许可证全文见 [licenses/javaht-MIT.txt](licenses/javaht-MIT.txt)，
+文件级对应关系见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
 ## 许可证
 
-MIT。词表与 `Localizable.strings` 来源于
-[javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn)，
-详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+MIT。
+
+```
+Copyright (c) 2026 lr19506167395-sys
+Copyright (c) 2025 javaht   （词表与部分实现的原始作者）
+```
