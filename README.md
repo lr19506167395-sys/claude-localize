@@ -36,7 +36,7 @@ cd claude-localize
 
 ### 方式 B：下载菜单栏 App
 
-到 [Releases](https://github.com/lr19506167395-sys/claude-localize/releases) 下载 `Claude汉化.app.zip`，
+到 [Releases](https://github.com/lr19506167395-sys/claude-localize/releases) 下载 `claude-localize-menubar-v1.0.0.zip`，
 解压后拖进 `/Applications`，**首次打开需右键 →「打开」**（未签名未公证，Gatekeeper 会拦截）。
 
 ## 特性
