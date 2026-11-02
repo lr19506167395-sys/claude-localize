@@ -131,6 +131,40 @@ class PruneTests(unittest.TestCase):
             backup.prune_old_backups(app, keep=1)
             self.assertTrue(a.exists() or b.exists(), "至少得留下能恢复 Claude 的备份")
 
+    def test_does_not_wipe_everything_when_version_unreadable(self):
+        """plist 在但读不出版本时，不能把所有备份判成版本不符全删。
+
+        读不出来 != 版本是 0。若把 "0" 当基准，所有备份都对不上，会被删光。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base, version="4.4212.0")
+            (app / "Contents" / "Info.plist").write_text(
+                '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>',
+                encoding="utf-8",
+            )
+            a = _touch_backup(base, "zh-1", "4.29.0")
+            b = _touch_backup(base, "zh-2", "4.4212.0")
+            self.assertIsNone(backup._current_key(app))
+
+            backup.prune_old_backups(app, keep=1)
+            self.assertTrue(backup.list_backups(app), "不能把备份删光")
+            self.assertEqual(backup.best_backup(app), b)   # 退回版本最高的那份
+            self.assertTrue(a.exists() or b.exists())
+
+    def test_best_backup_falls_back_when_version_unreadable(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base, version="4.4212.0")
+            (app / "Contents" / "Info.plist").write_text(
+                '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>',
+                encoding="utf-8",
+            )
+            old = _touch_backup(base, "zh-1", "4.29.0")
+            new = _touch_backup(base, "zh-2", "4.4212.0")
+            self.assertEqual(backup.best_backup(app), new)
+            self.assertIsNot(backup.best_backup(app), old)
+
 class PristineTests(unittest.TestCase):
     """备份性质：官方原版 vs 已汉化。"""
 

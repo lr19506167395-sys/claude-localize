@@ -152,14 +152,6 @@ def restore_backup(app: Path, backup: Path) -> None:
             print(f"提示：临时目录未能自动删除，可稍后执行 sudo rm -rf {trash}")
 
 
-def latest_pristine(app: Path) -> Path | None:
-    """版本最高的**官方原版**备份（不看当前 app 版本）。"""
-    items = [p for p in list_backups(app) if is_complete_backup(p) and is_pristine(p)]
-    if not items:
-        return None
-    return max(items, key=lambda p: (version_key(bundle_version(p)), p.stat().st_mtime))
-
-
 def _at_version(items: list[Path], version: str) -> list[Path]:
     """筛出与 ``version`` 版本号相同的备份。
 
@@ -170,6 +162,18 @@ def _at_version(items: list[Path], version: str) -> list[Path]:
     return [p for p in items if version_key(bundle_version(p)) == want]
 
 
+def _current_key(app: Path) -> tuple[int, ...] | None:
+    """当前 Claude 的版本 key；无从判断时返回 None。
+
+    两种读不到的情况要一起处理：app 根本不在了，或者 plist 在但没有
+    ``CFBundleShortVersionString``（PlistBuddy 读失败也返回 "0"）。
+    调用方拿到 None 必须放宽判断，不能把「读不出来」当成「版本是 0」——
+    否则会认为所有备份都版本不符，进而把它们全部删光。
+    """
+    key = version_key(bundle_version(app))
+    return None if key == (0,) else key
+
+
 def best_backup(app: Path) -> Path | None:
     """还原/重打补丁该用哪份备份：同版本里优先原版，其次最新。
 
@@ -177,21 +181,21 @@ def best_backup(app: Path) -> Path | None:
     旧版本的原版备份永远压着新版本的干净备份，还原被降级保护拦下、
     重装补丁也报错——用户明明有可用备份却用不了。
     """
-    same = _at_version(
-        [p for p in list_backups(app) if is_complete_backup(p)],
-        bundle_version(app),
-    )
-    if not same and not (app / "Contents" / "Info.plist").exists():
-        # app 本身不在（安装过程中被临时改名，或替换失败）：
-        # 这时没有「当前版本」可言，退回版本最高的完整备份，先让 Claude 回来。
-        complete = [p for p in list_backups(app) if is_complete_backup(p)]
-        if complete:
-            newest_version = max(
-                (bundle_version(p) for p in complete), key=version_key
-            )
-            same = _at_version(complete, newest_version)
+    complete = [p for p in list_backups(app) if is_complete_backup(p)]
+    if not complete:
+        return None
+
+    cur = _current_key(app)
+    if cur is None:
+        # 版本无从判断（app 不在，或 plist 读不出来）：退回版本最高的完整备份，
+        # 先让 Claude 回来。这时没有「降级」可言，能启动比版本对更重要。
+        newest_version = max((bundle_version(p) for p in complete), key=version_key)
+        same = _at_version(complete, newest_version)
+    else:
+        same = [p for p in complete if version_key(bundle_version(p)) == cur]
     if not same:
         return None
+
     pristine = [p for p in same if is_pristine(p)]
     pool = pristine or same
 
@@ -304,10 +308,9 @@ def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
             print(f"警告：备份未删干净 {path}（{exc}）")
             return False
 
-    # app 不在时（安装中途被改名）bundle_version 会返回 "0"，
-    # 拿它当基准会把所有备份判成版本不符全部删光——这种情况下不按版本删。
-    has_app = (app / "Contents" / "Info.plist").is_file()
-    cur_key = version_key(bundle_version(app)) if has_app else None
+    # app 不在、或 plist 读不出版本时不能按版本删：那会把所有备份判成
+    # 版本不符全部删光，真出问题时就没有可恢复的 Claude 了。
+    cur_key = _current_key(app)
 
     # 1. 不完整的、以及版本对不上的，全删（keeper 除外）
     complete: list[Path] = []
