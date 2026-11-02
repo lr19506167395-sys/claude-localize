@@ -7,8 +7,8 @@ Claude Desktop 中文界面补丁（macOS，简体中文）。
 > 本项目基于 **[javaht/claude-desktop-zh-cn](https://github.com/javaht/claude-desktop-zh-cn)**（MIT）的
 > 词表与实现思路，详见下方[致谢与来源](#致谢与来源)。
 
-> **支持版本：Claude Desktop for macOS 4.29.0。** Claude 升级后布局可能变化，装之前先用
-> `claude-localize status` 确认版本。
+> **已验证版本：Claude Desktop for macOS 4.29.0 / 4.4212.0。** Claude 升级后布局可能变化，
+> 装之前先用 `claude-localize status` 确认版本。
 
 ## ⚠️ 使用前必读
 
@@ -21,6 +21,9 @@ Claude Desktop 中文界面补丁（macOS，简体中文）。
 | **Claude 升级后失效** | 自动更新会覆盖补丁，界面变回英文，需要重新安装一次 |
 | **无法撤销的部分** | javaht 时代的硬编码字符串替换是内容级改动，无法逐字还原 |
 | **出问题可恢复** | 安装前自动整包备份；实在不行重装官方 Claude 即可彻底还原 |
+
+> 备份**只对同一版本有效**。Claude 自动更新后，旧版本的备份不能再拿来还原
+> （会把版本降回去），工具会自动改用同版本的新备份，并在下次安装时清掉过期的那些。
 
 **首次打开 Claude汉化.app 被系统拦截时**：在 Finder 里右键 → 「打开」 → 再点「打开」。
 这是 macOS Gatekeeper 对未签名应用的正常拦截，不是应用本身有问题。
@@ -57,6 +60,8 @@ cd claude-localize
 - **完整回滚**：安装前整包备份，一条命令还原。还原只做整体替换、**不改包内任何文件**
   （删包内被签名的资源会让签名封条失效，Claude 启动即 SIGTRAP）；
   想清历史残留用 `restore --clean` 或菜单里的「清理安装残留」，两者都会重新签名
+- **备份按版本管理**：还原只用**当前 Claude 版本**的备份，绝不拿旧版本顶上（那等于降级）；
+  旧版本的备份在下次安装时自动清掉，不会越积越多
 - **残留清理**：javaht/旧版留下的散装 `zh-CN.json`、中断的解包目录、半截备份
 - **隔离验证**：`tools/isolated_verify.py` 在临时副本上跑完整流程再逐层校验
 
@@ -69,7 +74,7 @@ cd claude-localize
 菜单结构（首次使用）：
 
 ```
-状态：4.29.0 · 未汉化
+状态：4.4212.0 · 未汉化
 1. 安装中文补丁 ▸
      1. 仅主界面中文（不改 app.asar）
      2. 主界面 + 桌面壳层中文（改 app.asar）

@@ -105,9 +105,31 @@ class PruneTests(unittest.TestCase):
             self.assertTrue(latest.exists())
             self.assertFalse(other.exists())
 
+    def test_removes_backups_of_other_versions(self):
+        """旧版本备份必须删：既不能还原（会降级），也不能拿来重打补丁。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base, version="4.4212.0")
+            stale = _touch_backup(base, "zh-1", "4.29.0")
+            backup.mark_pristine(stale)
+            current = _touch_backup(base, "zh-2", "4.4212.0")
+            os.utime(stale, (3000, 3000))     # 比当前还新，也不能留
 
-if __name__ == "__main__":
-    unittest.main()
+            backup.prune_old_backups(app, keep=1)
+            self.assertFalse(stale.exists(), "旧版本原版备份不该永久保留")
+            self.assertTrue(current.exists())
+
+    def test_does_not_wipe_everything_when_app_is_missing(self):
+        """安装中途 app 被改名时，版本号会读成 "0"，绝不能因此把所有备份删光。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base, version="4.4212.0")
+            a = _touch_backup(base, "zh-1", "4.29.0")
+            b = _touch_backup(base, "zh-2", "4.4212.0")
+            app.rename(base / "Claude.app.moved")
+
+            backup.prune_old_backups(app, keep=1)
+            self.assertTrue(a.exists() or b.exists(), "至少得留下能恢复 Claude 的备份")
 
 class PristineTests(unittest.TestCase):
     """备份性质：官方原版 vs 已汉化。"""
@@ -128,17 +150,38 @@ class PristineTests(unittest.TestCase):
             self.assertFalse(backup.is_pristine(b))
             self.assertEqual(backup.backup_kind(app), "patched")
 
-    def test_best_backup_prefers_pristine(self):
+    def test_best_backup_ignores_pristine_of_other_version(self):
+        """回归：Claude 自动更新后，旧版本原版备份不能压住新版本的干净备份。
+
+        实测现场：4.29.0 的原版备份带着 pristine 标记，4.4212.0 的干净备份
+        没有标记。旧实现只判「是不是原版」，永远选中 4.29 那份，
+        还原被降级保护拦下、重装补丁也报错——用户明明有可用备份却用不了。
+        """
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
-            app = make_app(base)
+            app = make_app(base, version="4.4212.0")
+            stale = _touch_backup(base, "zh-1", "4.29.0")
+            backup.mark_pristine(stale)
+            current = _touch_backup(base, "zh-2", "4.4212.0")
+            self.assertEqual(backup.best_backup(app), current)
+
+    def test_best_backup_none_when_only_other_versions(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base, version="4.4212.0")
+            _touch_backup(base, "zh-1", "4.29.0")
+            self.assertIsNone(backup.best_backup(app))
+
+    def test_best_backup_prefers_pristine_within_same_version(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base, version="4.29.0")
             dirty = _touch_backup(base, "zh-1", "4.29.0")
-            clean = _touch_backup(base, "zh-2", "4.20.0")   # 版本更低
+            clean = _touch_backup(base, "zh-2", "4.29.0")
             backup.mark_pristine(clean)
-            os.utime(dirty, (3000, 3000))
+            os.utime(dirty, (3000, 3000))      # 已汉化的那份更新
             os.utime(clean, (1000, 1000))
             self.assertEqual(backup.best_backup(app), clean)
-            self.assertEqual(backup.latest_backup(app), dirty)
 
     def test_prune_never_deletes_pristine(self):
         with tempfile.TemporaryDirectory() as td:

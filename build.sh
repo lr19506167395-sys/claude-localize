@@ -24,10 +24,15 @@ if [ ! -d "$APP_SRC" ]; then
   exit 1
 fi
 
-# 路径带空格也要安全：用 printf %q 转义后再交给 osascript
-ESC_SRC=$(printf '%q' "$APP_SRC")
-ESC_DST=$(printf '%q' "$APP_DST")
-osascript -e "do shell script \"rm -rf $ESC_DST; ditto $ESC_SRC $ESC_DST\" with administrator privileges"
+# 路径带中文和空格：不能拼进 AppleScript 字符串（printf %q 产出的 $'...' 转义
+# AppleScript 不认识，会报 -2741 语法错误）。改用 argv 传参，让 shell 自己拿引号。
+osascript - "$APP_SRC" "$APP_DST" <<'APPLESCRIPT'
+on run argv
+  set src to item 1 of argv
+  set dst to item 2 of argv
+  do shell script "/bin/rm -rf " & quoted form of dst & " && /usr/bin/ditto " & quoted form of src & " " & quoted form of dst with administrator privileges
+end run
+APPLESCRIPT
 
 echo "清理产物（避免 Finder 出现重复 app）…"
 rm -rf dist/Claude汉化.app

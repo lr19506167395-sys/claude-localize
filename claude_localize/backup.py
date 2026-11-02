@@ -12,6 +12,9 @@ BACKUP_GLOB = "Claude.backup-before-zh-*.app"
 # 还原前会把它删掉，所以不会污染包内容、也不会影响签名封条。
 PRISTINE_MARKER = ".claude-localize-pristine"
 
+_SIGNED_CACHE: dict[tuple[str, int], bool] = {}
+_VERSION_CACHE: dict[tuple[str, int], str] = {}
+
 
 def _rmtree(path: Path) -> None:
     """删除目录；/Applications 下常有 root 属主或 uchg 标记的残留文件。"""
@@ -52,8 +55,16 @@ def is_complete_backup(path: Path) -> bool:
 
 
 def is_pristine(path: Path) -> bool:
-    """这份备份是不是官方原版（打补丁之前的状态）。"""
-    return (path / PRISTINE_MARKER).is_file()
+    """这份备份是不是官方原版（打补丁之前的状态）。
+
+    标记文件之外，还认「仍带官方 Developer ID 签名」这一条：
+    我们每次打完补丁都会 ad-hoc 重签（TeamIdentifier 变成 not set），
+    所以带着真实 TeamIdentifier 的备份必然是没被我们碰过的。
+    少了这条，标记文件万一没写成功，原版备份就会被误当成汉化备份。
+    """
+    if (path / PRISTINE_MARKER).is_file():
+        return True
+    return is_officially_signed(path)
 
 
 def mark_pristine(path: Path, note: str = "official") -> None:
@@ -142,20 +153,56 @@ def restore_backup(app: Path, backup: Path) -> None:
 
 
 def latest_pristine(app: Path) -> Path | None:
-    """最新的一份**官方原版**备份（还原时优先用它）。"""
+    """版本最高的**官方原版**备份（不看当前 app 版本）。"""
     items = [p for p in list_backups(app) if is_complete_backup(p) and is_pristine(p)]
     if not items:
         return None
     return max(items, key=lambda p: (version_key(bundle_version(p)), p.stat().st_mtime))
 
 
+def _at_version(items: list[Path], version: str) -> list[Path]:
+    """筛出与 ``version`` 版本号相同的备份。
+
+    还原/重打补丁都必须用同版本备份：拿旧版本顶上等于把 Claude 降级，
+    新版布局和旧备份对不上时还会启动崩溃。宁可换不了，也不能换错。
+    """
+    want = version_key(version)
+    return [p for p in items if version_key(bundle_version(p)) == want]
+
+
 def best_backup(app: Path) -> Path | None:
-    """优先返回原版备份；没有原版才退回最新备份。"""
-    return latest_pristine(app) or latest_backup(app)
+    """还原/重打补丁该用哪份备份：同版本里优先原版，其次最新。
+
+    早期实现只判「是不是原版」不看版本，于是 Claude 自动更新后，
+    旧版本的原版备份永远压着新版本的干净备份，还原被降级保护拦下、
+    重装补丁也报错——用户明明有可用备份却用不了。
+    """
+    same = _at_version(
+        [p for p in list_backups(app) if is_complete_backup(p)],
+        bundle_version(app),
+    )
+    if not same and not (app / "Contents" / "Info.plist").exists():
+        # app 本身不在（安装过程中被临时改名，或替换失败）：
+        # 这时没有「当前版本」可言，退回版本最高的完整备份，先让 Claude 回来。
+        complete = [p for p in list_backups(app) if is_complete_backup(p)]
+        if complete:
+            newest_version = max(
+                (bundle_version(p) for p in complete), key=version_key
+            )
+            same = _at_version(complete, newest_version)
+    if not same:
+        return None
+    pristine = [p for p in same if is_pristine(p)]
+    pool = pristine or same
+
+    def newest(p: Path) -> tuple[tuple[int, ...], float]:
+        return (version_key(bundle_version(p)), p.stat().st_mtime)
+
+    return max(pool, key=newest)
 
 
 def backup_kind(app: Path) -> str:
-    """给界面用：pristine / patched / none。"""
+    """给界面用：pristine / patched / none（指 ``best_backup()`` 那一份）。"""
     b = best_backup(app)
     if b is None:
         return "none"
@@ -181,12 +228,22 @@ def bundle_version(app: Path) -> str:
     plist = app / "Contents" / "Info.plist"
     if not plist.exists():
         return "0"
+    try:
+        stamp = plist.stat().st_mtime_ns
+    except OSError:
+        stamp = 0
+    key = (str(app), stamp)
+    hit = _VERSION_CACHE.get(key)
+    if hit is not None:
+        return hit
     result = subprocess.run(
         ["/usr/libexec/PlistBuddy", "-c",
          "Print :CFBundleShortVersionString", str(plist)],
         capture_output=True, text=True,
     )
-    return result.stdout.strip() or "0"
+    version = result.stdout.strip() or "0"
+    _VERSION_CACHE[key] = version
+    return version
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -198,10 +255,25 @@ def version_key(version: str) -> tuple[int, ...]:
 
 
 def is_officially_signed(app: Path) -> bool:
-    """判断 app 是否仍带官方 Developer ID 签名。"""
+    """判断 app 是否仍带官方 Developer ID 签名。
+
+    ``codesign`` 扫一个 600MB 的 bundle 要将近一秒，而 ``is_pristine()``
+    会在遍历备份时反复问同一个路径。缓存键带上 ``_CodeSignature`` 的 mtime，
+    重签名后自动失效，不会把刚被我们 ad-hoc 重签的包读成官方版。
+    读不到签名文件时不缓存（多半是路径还不存在，下次状态就变了）。
+    """
     from . import signer
 
-    return bool(signer.team_identifier(app))
+    app = Path(app)
+    try:
+        stamp = (app / "Contents" / "_CodeSignature" / "CodeResources").stat().st_mtime_ns
+    except OSError:
+        return bool(signer.team_identifier(app))
+    key = (str(app), stamp)
+    hit = _SIGNED_CACHE.get(key)
+    if hit is None:
+        hit = _SIGNED_CACHE[key] = bool(signer.team_identifier(app))
+    return hit
 
 
 def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
@@ -209,15 +281,18 @@ def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
 
     规则：
       * 不完整的备份**一律删**（留着只会在还原时坑人）
-      * ``latest_backup()`` 会选中的那个**永不删**（否则还原会降级）
-      * 其余按 mtime 从旧到新删，只保留最新 keep 个
+      * ``best_backup()`` 会选中的那个永不删（否则还原没得用）
+      * **跟当前 Claude 版本不同的备份一律删**——包括原版备份。
+        旧版本原版备份看着「无价」，实际既不能还原（会降级）
+        也不能拿来重打补丁，只占几百 MB。这条缺失曾让 4.29 的原版备份
+        在 4.4212 上长期压着新备份，还把「恢复原样」直接搞成报错。
+      * 同版本的其余备份里，最多再留 keep 个最新的
     """
     items = list_backups(app)                      # 旧 → 新
     if not items:
         return []
 
-    keeper = latest_backup(app)
-    pristine = latest_pristine(app)
+    keeper = best_backup(app)
     removed: list[Path] = []
 
     def drop(path: Path) -> bool:
@@ -229,22 +304,27 @@ def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
             print(f"警告：备份未删干净 {path}（{exc}）")
             return False
 
-    # 1. 先清不完整的
-    complete = []
-    for item in items:
-        if is_complete_backup(item):
-            complete.append(item)
-        elif item != keeper:
-            drop(item)
+    # app 不在时（安装中途被改名）bundle_version 会返回 "0"，
+    # 拿它当基准会把所有备份判成版本不符全部删光——这种情况下不按版本删。
+    has_app = (app / "Contents" / "Info.plist").is_file()
+    cur_key = version_key(bundle_version(app)) if has_app else None
 
-    # 2. 完整备份里最多留 keep 个，且必须包含 keeper（版本最高的那个）
-    survivors: set[Path] = set()
-    if keeper is not None:
-        survivors.add(keeper)
-    if pristine is not None:
-        survivors.add(pristine)   # 原版备份是无价的，任何情况下都不删
+    # 1. 不完整的、以及版本对不上的，全删（keeper 除外）
+    complete: list[Path] = []
+    for item in items:
+        if item == keeper:
+            complete.append(item)
+        elif not is_complete_backup(item):
+            drop(item)
+        elif cur_key is not None and version_key(bundle_version(item)) != cur_key:
+            drop(item)
+        else:
+            complete.append(item)
+
+    # 2. 同版本完整备份最多留 keep 个，keeper 必留
+    survivors: set[Path] = {keeper} if keeper is not None else set()
     for item in reversed(complete):            # 新 → 旧
-        if len(survivors) >= keep:
+        if len(survivors) >= max(keep, 1):
             break
         survivors.add(item)
     for item in complete:

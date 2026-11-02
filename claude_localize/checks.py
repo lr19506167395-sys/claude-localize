@@ -84,7 +84,7 @@ def shell_state(inst: discover.ClaudeInstall) -> dict:
 def status(verbose: bool = True) -> dict:
     inst = discover.detect()
     patched = discover.is_patched(inst)
-    b = backup.latest_backup(inst.app)
+    b = backup.best_backup(inst.app)
     version = None
     vf = _pack_dir() / ".upstream-version"
     if vf.exists():
@@ -136,7 +136,7 @@ def status(verbose: bool = True) -> dict:
             )
             print(f"备份           : {info['backup']}（{kind}）")
         else:
-            print("备份           : 无")
+            print("备份           : 无可用备份（版本对不上或已不完整）")
         print(f"词表版本       : {version or '未记录'}")
         if frontend_gap:
             a, bb = frontend_gap

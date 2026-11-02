@@ -50,6 +50,11 @@ def _load_settings() -> dict:
 def _save_settings(data: dict) -> None:
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        # 里面有 API Key，只给本用户读写（默认 0644 同机其他账户可读）
+        SETTINGS_PATH.chmod(0o600)
+    except OSError:
+        pass
 
 
 class ClaudeLocalizeMenu(rumps.App):
