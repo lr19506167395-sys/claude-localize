@@ -12,7 +12,7 @@ BACKUP_GLOB = "Claude.backup-before-zh-*.app"
 # 还原前会把它删掉，所以不会污染包内容、也不会影响签名封条。
 PRISTINE_MARKER = ".claude-localize-pristine"
 
-_SIGNED_CACHE: dict[tuple[str, int], bool] = {}
+_SIGNED_CACHE: dict[tuple[str, int], tuple[bool, bool]] = {}
 _VERSION_CACHE: dict[tuple[str, int], str] = {}
 
 
@@ -57,14 +57,21 @@ def is_complete_backup(path: Path) -> bool:
 def is_pristine(path: Path) -> bool:
     """这份备份是不是官方原版（打补丁之前的状态）。
 
-    标记文件之外，还认「仍带官方 Developer ID 签名」这一条：
-    我们每次打完补丁都会 ad-hoc 重签（TeamIdentifier 变成 not set），
-    所以带着真实 TeamIdentifier 的备份必然是没被我们碰过的。
-    少了这条，标记文件万一没写成功，原版备份就会被误当成汉化备份。
+    判据：带原版标记文件，**或**「签名封条完好且仍是官方 Developer ID」。
+
+    「带 TeamIdentifier」单独不够：封条被破坏时 ``codesign -dv`` 照样
+    输出 ``TeamIdentifier=Q6L2SF6YDW``（实测：往 Resources 里加一个文件，
+    ``--verify`` 报 "a sealed resource is missing or invalid"，``-dv`` 仍报官方
+    Team ID）。汉化写到一半中断——语言文件已写入、还没走到 resign——
+    留下的包正好是这个形态。只判 TeamIdentifier 会把它当成「官方原版」，
+    用户点「恢复原样」拿回来的仍是中文包，状态栏还显示「原版」。
+
+    所以这里必须两个条件同时成立：封条有效 + 官方 Team ID。
     """
     if (path / PRISTINE_MARKER).is_file():
         return True
-    return is_officially_signed(path)
+    signed, sealed = _cached_signature(path)
+    return sealed and signed
 
 
 def mark_pristine(path: Path, note: str = "official") -> None:
@@ -106,7 +113,7 @@ def create_backup(app: Path, *, pristine: bool = False) -> Path:
     ``pristine=True`` 表示「正准备打补丁的这份是官方原版」，会写一个标记文件，
     这样「恢复原样」能挑到真正干净的备份，状态栏也能显示出来。
 
-    这会暂时让 app 路径消失，调用方必须紧接着 put_in_place()。
+    这会暂时让 app 路径消失，调用方必须紧接着 swap_in()。
     """
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = app.parent / f"Claude.backup-before-zh-{stamp}.app"
@@ -118,18 +125,62 @@ def create_backup(app: Path, *, pristine: bool = False) -> Path:
     return dest
 
 
-def put_in_place(app: Path, source: Path) -> None:
-    """把打好补丁的 source 重命名到 app 路径（原子）。"""
+def _copy_tree(src: Path, dst: Path) -> None:
+    """用 ditto 复制 app 目录。
+
+    不能用 ``shutil.copytree``：会丢扩展属性、ACL、资源分支，
+    复制出来的 Claude 签名和权限都不对。
+    """
+    if dst.exists():
+        raise OSError(f"目标已存在：{dst}")
+    result = subprocess.run(
+        ["ditto", str(src), str(dst)], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        raise OSError(f"ditto 失败：{result.stderr.strip()}")
+
+
+def swap_in(app: Path, source: Path, fallback: Path) -> None:
+    """把 source 就位到 app；失败时用 ``fallback``（旧版本）顶回去。
+
+    安装流程里 ``create_backup()`` 已经把旧 app 改名成了备份，所以进入这里时
+    ``app`` 通常不存在，没有「原位的旧 app」可以靠 rename 恢复。
+    这里必须显式接收 fallback：rename 失败时把旧版本放回原位，
+    绝不能让 Claude.app 凭空消失。
+
+    注意 fallback 就是那份备份，**不能用 rename 把它挪走**——那样
+    Claude 回来了，唯一可回退的副本却没了。用 copy 顶回去，备份原地不动。
+    """
     if app.exists():
         trash = _free_trash_name(app)
         app.rename(trash)
-        source.rename(app)
+        try:
+            source.rename(app)
+        except BaseException:
+            if not app.exists():
+                trash.rename(app)
+            raise
         try:
             shutil.rmtree(trash)
         except (PermissionError, OSError):
             print(f"提示：临时目录未能自动删除，可稍后执行 sudo rm -rf {trash}")
-    else:
+        return
+
+    try:
         source.rename(app)
+    except BaseException:
+        if not app.exists() and fallback.exists():
+            try:
+                # clonefile 级复制，秒级返回；保留备份本身
+                _copy_tree(fallback, app)
+                print(f"替换失败，已把原版本复制回 {app}（备份保留在 {fallback.name}）")
+            except OSError as exc:
+                print(
+                    f"严重：替换失败且原版本未能自动放回。\n"
+                    f"  可回退的备份仍在：{fallback}\n"
+                    f"  请手动执行：ditto {fallback!s} {app!s}\n  （{exc}）"
+                )
+        raise
 
 
 def restore_backup(app: Path, backup: Path) -> None:
@@ -144,7 +195,19 @@ def restore_backup(app: Path, backup: Path) -> None:
     if app.exists():                     # 上一次安装失败时 app 可能不在了
         trash = _free_trash_name(app)
         app.rename(trash)
-    backup.rename(app)
+    try:
+        backup.rename(app)
+    except BaseException:
+        # 备份没能就位：把原来的 app 放回去，别让它凭空消失
+        if trash is not None and not app.exists():
+            try:
+                trash.rename(app)
+            except OSError as exc:
+                print(
+                    f"严重：还原失败且原 app 未能放回。\n"
+                    f"  原 app 在：{trash}\n  请手动执行：mv {trash!s} {app!s}\n  （{exc}）"
+                )
+        raise
     if trash is not None:
         try:
             shutil.rmtree(trash)
@@ -229,6 +292,13 @@ def latest_backup(app: Path) -> Path | None:
 
 
 def bundle_version(app: Path) -> str:
+    """读 app 的版本号；读不出来返回 ``"0"``。
+
+    必须检查 returncode：PlistBuddy 失败时把错误信息写进 ``stdout``
+    （``Error Reading File: …``），旧实现直接 strip 后返回，于是那段文字
+    被 ``version_key`` 解析成一个天文数字，看起来像个极高的版本号，
+    进而影响备份排序和版本过滤。
+    """
     plist = app / "Contents" / "Info.plist"
     if not plist.exists():
         return "0"
@@ -245,7 +315,11 @@ def bundle_version(app: Path) -> str:
          "Print :CFBundleShortVersionString", str(plist)],
         capture_output=True, text=True,
     )
-    version = result.stdout.strip() or "0"
+    raw = result.stdout.strip() if result.returncode == 0 else ""
+    # 只接受 3.4.29 这种形态；PlistBuddy 的报错文本一律当读不出来
+    version = raw if raw and all(
+        ch.isdigit() or ch == "." for ch in raw
+    ) else "0"
     _VERSION_CACHE[key] = version
     return version
 
@@ -264,7 +338,24 @@ def is_officially_signed(app: Path) -> bool:
     ``codesign`` 扫一个 600MB 的 bundle 要将近一秒，而 ``is_pristine()``
     会在遍历备份时反复问同一个路径。缓存键带上 ``_CodeSignature`` 的 mtime，
     重签名后自动失效，不会把刚被我们 ad-hoc 重签的包读成官方版。
-    读不到签名文件时不缓存（多半是路径还不存在，下次状态就变了）。
+    """
+    return _cached_signature(app)[0]
+
+
+def is_sealed(app: Path) -> bool:
+    """代码签名封条是否完好（``codesign --verify --deep --strict``）。
+
+    与 ``is_officially_signed`` 共用一个缓存条目：两者都要跑 codesign，
+    合并成一次读取（--verify 与 -dv 是两条命令，但仍按同一 mtime 缓存）。
+    """
+    return _cached_signature(app)[1]
+
+
+def _cached_signature(app: Path) -> tuple[bool, bool]:
+    """返回 ``(是否官方签名, 封条是否完好)``，按路径 + 封条 mtime 缓存。
+
+    读不到 ``CodeResources`` 时不缓存：路径可能还不存在，也可能是个
+    还没签过名的包，下次再问状态就不一样了。
     """
     from . import signer
 
@@ -272,12 +363,28 @@ def is_officially_signed(app: Path) -> bool:
     try:
         stamp = (app / "Contents" / "_CodeSignature" / "CodeResources").stat().st_mtime_ns
     except OSError:
-        return bool(signer.team_identifier(app))
+        return bool(signer.team_identifier(app)), signer.verify(app)[0]
     key = (str(app), stamp)
     hit = _SIGNED_CACHE.get(key)
     if hit is None:
-        hit = _SIGNED_CACHE[key] = bool(signer.team_identifier(app))
+        hit = _SIGNED_CACHE[key] = (
+            bool(signer.team_identifier(app)),
+            signer.verify(app)[0],
+        )
     return hit
+
+
+def _version_mismatch(item: Path, cur_key: tuple[int, ...]) -> bool:
+    """备份版本与当前版本不同？**读不出来的备份不算不符**。
+
+    完整备份但 plist 读不出版本（被别的工具写坏、从老版本手工拷来），
+    它仍可能是唯一的回滚副本。这里返回 False 让它留到下一轮判断，
+    而不是当成「版本不符」删掉——宁可多留几百 MB，不能删掉唯一副本。
+    """
+    key = version_key(bundle_version(item))
+    if key == (0,):
+        return False
+    return key != cur_key
 
 
 def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
@@ -319,7 +426,7 @@ def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
             complete.append(item)
         elif not is_complete_backup(item):
             drop(item)
-        elif cur_key is not None and version_key(bundle_version(item)) != cur_key:
+        elif cur_key is not None and _version_mismatch(item, cur_key):
             drop(item)
         else:
             complete.append(item)

@@ -505,13 +505,18 @@ def install(
             # 备份不完整就别替换，否则用户没有可回退的副本
             raise SystemExit(f"备份不完整，已中止安装：{report.backup_path}")
         try:
-            backup.put_in_place(inst.app, tmp)
-        except Exception as exc:
-            # 替换失败：把备份放回原位，保证 Claude 仍在
-            b = report.backup_path
-            if b and b.exists() and not inst.app.exists():
-                b.rename(inst.app)
-                print(f"替换失败，已回滚到原版本：{exc}")
+            backup.swap_in(inst.app, tmp, report.backup_path)
+        except BaseException as exc:
+            # swap_in 会先把旧版本放回原位；这里只做最后提示。
+            # 不能把备份 rename 成 Claude.app——那会让备份位置凭空消失，
+            # 用户下次安装失败就再没有可回退的副本了。
+            if not inst.app.exists():
+                b = report.backup_path
+                print(
+                    f"替换失败，Claude.app 不在原位：{exc}\n"
+                    f"  可回退的备份仍在：{b}\n"
+                    f"  恢复方法：mv {b!s} {inst.app!s}"
+                )
             raise SystemExit(f"替换 app 失败：{exc}") from exc
 
     tick(97, "清理旧备份")

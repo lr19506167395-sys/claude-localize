@@ -5,6 +5,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from helpers import make_app
 
@@ -164,6 +165,85 @@ class PruneTests(unittest.TestCase):
             new = _touch_backup(base, "zh-2", "4.4212.0")
             self.assertEqual(backup.best_backup(app), new)
             self.assertIsNot(backup.best_backup(app), old)
+
+class PruneSafetyTests(unittest.TestCase):
+    """只留「能救回 Claude」的备份；任何输入组合都不能删光。"""
+
+    def test_keeps_complete_backup_with_unreadable_version(self):
+        """备份自己的版本读不出来时，不能当成版本不符删掉。
+
+        PlistBuddy 失败时把报错文本写进 stdout，旧实现把它当版本号，
+        解析成一个天文数字；这里同时验证它不会再污染排序。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base, version="4.4212.0")
+            broken = _touch_backup(base, "zh-1", "")      # 无版本号
+            (broken / "Contents" / "Info.plist").write_text(
+                '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>',
+                encoding="utf-8",
+            )
+            self.assertTrue(backup.is_complete_backup(broken))
+            self.assertEqual(backup.bundle_version(broken), "0")
+
+            backup.prune_old_backups(app, keep=1)
+            self.assertTrue(broken.exists(), "唯一可恢复的备份不能被删")
+
+    def test_bundle_version_never_returns_error_text(self):
+        with tempfile.TemporaryDirectory() as td:
+            app = make_app(Path(td), version="4.4212.0")
+            (app / "Contents" / "Info.plist").write_text(
+                '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>',
+                encoding="utf-8",
+            )
+            version = backup.bundle_version(app)
+            self.assertEqual(version, "0")
+            self.assertEqual(backup.version_key(version), (0,))
+
+
+class SwapInTests(unittest.TestCase):
+    """rename 失败时必须把旧版本顶回去，且备份不能因此消失。"""
+
+    def _make(self, base: Path, name: str, tag: str) -> Path:
+        app = base / name
+        (app / "Contents").mkdir(parents=True)
+        (app / "Contents" / "Info.plist").write_text(f"<plist><dict/><!--{tag}--></plist>")
+        return app
+
+    def test_restores_old_app_when_swap_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = self._make(base, "Claude.app", "LIVE")
+            patched = self._make(base, "patched.app", "PATCHED")
+            b = backup.create_backup(app, pristine=True)
+
+            real = Path.rename
+
+            def flaky(self, target):
+                if self.name == "patched.app" and Path(target).name == "Claude.app":
+                    raise OSError("模拟改名失败")
+                return real(self, target)
+
+            with mock.patch.object(Path, "rename", flaky):
+                with self.assertRaises(OSError):
+                    backup.swap_in(app, patched, b)
+
+            self.assertTrue(app.exists(), "Claude.app 不能凭空消失")
+            self.assertIn("LIVE", (app / "Contents" / "Info.plist").read_text())
+            self.assertTrue(b.exists(), "回滚不能把备份消耗掉")
+
+    def test_normal_swap_replaces_app(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = self._make(base, "Claude.app", "LIVE")
+            patched = self._make(base, "patched.app", "PATCHED")
+            b = backup.create_backup(app, pristine=True)
+
+            backup.swap_in(app, patched, b)
+            self.assertTrue(app.exists())
+            self.assertIn("PATCHED", (app / "Contents" / "Info.plist").read_text())
+            self.assertTrue(b.exists())
+
 
 class PristineTests(unittest.TestCase):
     """备份性质：官方原版 vs 已汉化。"""
