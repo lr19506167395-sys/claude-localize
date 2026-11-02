@@ -48,6 +48,27 @@ def has_integrity(header: dict[str, Any]) -> bool:
     return any("integrity" in e for _, e in asar.walk(header))
 
 
+def _first_bad_block(body: bytes, integrity: dict[str, Any]) -> int | None:
+    """逐块核对 4MB 分块哈希，返回第一个不符的块序号；全对返回 None。
+
+    Electron 运行时按 ``blockSize`` 分块校验，所以只比整文件 hash 不够——
+    需要同时确认分块表和块大小没有漂移。
+    """
+    blocks = integrity.get("blocks") or []
+    if not blocks:
+        return None
+    block_size = int(integrity.get("blockSize") or 4194304)
+    for i, want in enumerate(blocks):
+        chunk = body[i * block_size : (i + 1) * block_size]
+        if hashlib.sha256(chunk).hexdigest() != want:
+            return i
+    # 分块数对不上（文件长度变了但 blocks 没重算）也算不符
+    expected_count = (len(body) + block_size - 1) // block_size or 1
+    if len(blocks) != expected_count:
+        return min(len(blocks), expected_count)
+    return None
+
+
 # ── Info.plist 的 header 哈希 ──────────────────────────────────────
 # 除了每个文件条目里的 integrity，Claude 的 Info.plist 还记录了一份
 # 「header 字符串的 sha256」，启动时 Electron 会先验这个。
@@ -203,6 +224,75 @@ def verify_digest_slot(app: Path, integrity: dict | None = None) -> tuple[bool, 
     return True, f"已校验 {checked} 个槽" if checked else "无槽位"
 
 
+def probe_layout(app: Path) -> list[str]:
+    """动手之前先确认这台 Claude 的完整性结构是我们认识的样子。
+
+    返回问题列表（空 = 结构完整、可以安全改 asar）。放在真正改文件之前调用，
+    因为摘要槽一旦对不上，Electron 会 SIGTRAP 且没有任何可读错误——
+    等到事后 verify 才发现就晚了，用户拿到的是一个打不开的 Claude。
+
+    三条必须成立（少任何一条，改 asar 都会让 Claude 起不来）：
+      1. 能读到 ElectronAsarIntegrity 字典，且覆盖我们要改的 asar
+      2. Info.plist 上对应的 ``hash`` 键存在（缺了 sync_plist 会静默跳过）
+      3. Framework 里能找到 sentinel，并且至少有一个 used=1 的槽
+
+    第 3 条正是「fail-open」最危险的地方：Electron 收紧校验时的特征
+    恰恰是 sentinel 或槽布局变了，而那正是最不能放行的时刻。
+    """
+    import plistlib
+
+    plist = app / "Contents" / "Info.plist"
+    if not plist.is_file():
+        return ["缺少 Info.plist"]
+
+    problems: list[str] = []
+    try:
+        info = plistlib.loads(plist.read_bytes())
+    except Exception as exc:
+        return [f"Info.plist 无法解析：{exc}"]
+
+    integ = info.get("ElectronAsarIntegrity")
+    if not isinstance(integ, dict) or not integ:
+        problems.append("Info.plist 里没有 ElectronAsarIntegrity，无法同步 asar 校验和")
+    else:
+        for rel in ("Resources/app.asar", "Resources/ion-dist.asar"):
+            if not (app / "Contents" / rel).is_file():
+                continue
+            if rel not in integ:
+                problems.append(f"ElectronAsarIntegrity 未覆盖 {rel}（键名可能变了）")
+            elif not (integ.get(rel) or {}).get("hash"):
+                problems.append(f"ElectronAsarIntegrity 里 {rel} 缺少 hash 字段")
+
+    framework = app / ELECTRON_FRAMEWORK_REL
+    if not framework.is_file():
+        problems.append(f"找不到 Electron Framework，无法同步摘要槽：{ELECTRON_FRAMEWORK_REL}")
+    else:
+        data = framework.read_bytes()
+        start = 0
+        used = 0
+        found = 0
+        while True:
+            index = data.find(INTEGRITY_DIGEST_SENTINEL, start)
+            if index < 0:
+                break
+            found += 1
+            slot = index + len(INTEGRITY_DIGEST_SENTINEL)
+            if slot + 34 <= len(data) and data[slot] == 1:
+                used += 1
+            start = index + 1
+        if not found:
+            problems.append(
+                "Electron Framework 里找不到完整性摘要 sentinel（Electron 版本可能变了），"
+                "摘要槽无法同步"
+            )
+        elif not used:
+            problems.append(
+                "Electron Framework 里的摘要槽全部未启用（used=0），"
+                "但 plist 声明了 asar 校验和，改 asar 会让 Claude 无法启动"
+            )
+    return problems
+
+
 def verify_app(app: Path, *, deep: bool = True) -> list[str]:
     """完整校验一个 app 的 asar 完整性链，返回问题列表（空 = 通过）。
 
@@ -223,7 +313,9 @@ def verify_app(app: Path, *, deep: bool = True) -> list[str]:
 
     integ = info.get("ElectronAsarIntegrity") or {}
     if not isinstance(integ, dict) or not integ:
-        return []
+        # 这里不能放行：调用方（还原流程）依赖它判断「这个 app 能不能启动」。
+        # 声明了 asar 却没有校验字典，等于这一层完全没验过。
+        return ["Info.plist 里没有 ElectronAsarIntegrity，无法确认 asar 是否完整"]
 
     problems: list[str] = []
     for rel, entry in integ.items():
@@ -247,9 +339,18 @@ def verify_app(app: Path, *, deep: bool = True) -> list[str]:
             for rel_path, e in asar.walk(header):
                 if e.get("unpacked") or "integrity" not in e:
                     continue
+                ent = e["integrity"]
                 body = asar.read_file(data, header_size, e)
-                if e["integrity"]["hash"] != hashlib.sha256(body).hexdigest():
+                if ent.get("hash") != hashlib.sha256(body).hexdigest():
                     problems.append(f"{rel} 条目 integrity 不符：{rel_path}")
+                    break
+                # 分块哈希也要验：Electron 运行时按 4MB 块校验，
+                # 只比整文件 hash 会漏掉「整文件对、分块坏」的包。
+                bad = _first_bad_block(body, ent)
+                if bad is not None:
+                    problems.append(
+                        f"{rel} 条目分块 integrity 不符：{rel_path}（第 {bad} 块）"
+                    )
                     break
 
     ok, msg = verify_digest_slot(app, integ)

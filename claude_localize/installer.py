@@ -102,6 +102,20 @@ def patch_tree(
         app / frontend_bundle.APP_ASAR, lang
     )
 
+    # 改 asar 之前先确认这台 Claude 的完整性结构认识得了。
+    # 摘要槽对不上时 Electron 是 SIGTRAP 直接退出、没有可读错误，
+    # 所以宁可在这里拒绝，也不要把 Claude 改成打不开的样子。
+    if needs_asar:
+        layout = integrity.probe_layout(app)
+        if layout:
+            raise SystemExit(
+                "这台 Claude 的完整性结构与本工具预期的不一致，已中止（未修改任何文件）：\n"
+                + "\n".join(f"  ✗ {p}" for p in layout)
+                + "\n\n多半是 Claude 换了新版本。请先升级本工具；"
+                "或改用「仅主界面中文（不改 app.asar）」模式，它不碰这些结构。"
+            )
+        log("完整性结构检查：通过")
+
     # Claude 4.29+ 把前端和桌面壳层都打包进了 asar：
     # 先解包成目录，打完补丁再重新打包并同步 Info.plist 哈希。
     if needs_asar:
@@ -730,9 +744,13 @@ def _verify_tree(app: Path, lang: str, *, with_asar: bool = True) -> None:
         problems.append("找不到前端资源（ion-dist.asar 或 ion-dist 目录）")
 
     # 4. Electron Framework 里的字典摘要槽
+    #    改了 asar 就必须真的校验到槽；「找不到槽」不能算通过——
+    #    那正是 Electron 收紧校验、Claude 会起不来的特征。
     ok_slot, msg = integrity.verify_digest_slot(app)
     if not ok_slot:
         problems.append(msg)
+    elif asar_layout and "已校验" not in msg:
+        problems.append("改了 asar，却没能校验到 Electron Framework 摘要槽：" + msg)
 
     # 5. 原生 .lproj 字符串
     if native_strings.pack_file().exists() and not native_strings.installed(app):
