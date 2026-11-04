@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -69,9 +70,30 @@ def is_pristine(path: Path) -> bool:
     所以这里必须两个条件同时成立：封条有效 + 官方 Team ID。
     """
     if (path / PRISTINE_MARKER).is_file():
-        return True
+        try:
+            return _has_no_patch_content(path)
+        except (OSError, ValueError, SystemExit):
+            return False
     signed, sealed = _cached_signature(path)
-    return sealed and signed
+    if not (sealed and signed):
+        return False
+    try:
+        return _has_no_patch_content(path)
+    except (OSError, ValueError, SystemExit):
+        return False
+
+
+def _has_no_patch_content(path: Path) -> bool:
+    from . import asar, native_strings, shell, slashmenu
+
+    app_asar = path / "Contents" / "Resources" / "app.asar"
+    frontend_asar = path / "Contents" / "Resources" / "ion-dist.asar"
+    return not (
+        shell.has_artifacts(app_asar, "zh-CN")
+        or native_strings.installed(path)
+        or asar.has_entry(frontend_asar, "i18n/zh-CN.json")
+        or slashmenu.has_marker_in_asar(frontend_asar)
+    )
 
 
 def mark_pristine(path: Path, note: str = "official") -> None:
@@ -141,78 +163,69 @@ def _copy_tree(src: Path, dst: Path) -> None:
 
 
 def swap_in(app: Path, source: Path, fallback: Path) -> None:
-    """把 source 就位到 app；失败时用 ``fallback``（旧版本）顶回去。
+    """用已验证副本替换 app，失败时恢复旧版本且不消耗 fallback。
 
-    安装流程里 ``create_backup()`` 已经把旧 app 改名成了备份，所以进入这里时
-    ``app`` 通常不存在，没有「原位的旧 app」可以靠 rename 恢复。
-    这里必须显式接收 fallback：rename 失败时把旧版本放回原位，
-    绝不能让 Claude.app 凭空消失。
-
-    注意 fallback 就是那份备份，**不能用 rename 把它挪走**——那样
-    Claude 回来了，唯一可回退的副本却没了。用 copy 顶回去，备份原地不动。
+    交换前先把旧 app 留在同目录的 trash 中；若替换失败而 trash 恢复也失败，
+    再用 ditto 从 fallback 复制，不能把它 rename 走。
     """
+    trash: Path | None = None
     if app.exists():
         trash = _free_trash_name(app)
         app.rename(trash)
-        try:
-            source.rename(app)
-        except BaseException:
-            if not app.exists():
-                trash.rename(app)
-            raise
-        try:
-            shutil.rmtree(trash)
-        except (PermissionError, OSError):
-            print(f"提示：临时目录未能自动删除，可稍后执行 sudo rm -rf {trash}")
-        return
-
     try:
         source.rename(app)
     except BaseException:
-        if not app.exists() and fallback.exists():
-            try:
-                # clonefile 级复制，秒级返回；保留备份本身
-                _copy_tree(fallback, app)
-                print(f"替换失败，已把原版本复制回 {app}（备份保留在 {fallback.name}）")
-            except OSError as exc:
-                print(
-                    f"严重：替换失败且原版本未能自动放回。\n"
-                    f"  可回退的备份仍在：{fallback}\n"
-                    f"  请手动执行：ditto {fallback!s} {app!s}\n  （{exc}）"
-                )
-        raise
-
-
-def restore_backup(app: Path, backup: Path) -> None:
-    """用备份恢复 app（两次重命名，原子）。"""
-    if not backup.exists():
-        raise SystemExit(f"备份不存在：{backup}")
-
-    # 标记文件是我们加的，不能带进 Claude.app
-    _drop_pristine_marker(backup)
-
-    trash: Path | None = None
-    if app.exists():                     # 上一次安装失败时 app 可能不在了
-        trash = _free_trash_name(app)
-        app.rename(trash)
-    try:
-        backup.rename(app)
-    except BaseException:
-        # 备份没能就位：把原来的 app 放回去，别让它凭空消失
-        if trash is not None and not app.exists():
+        if app.exists():
+            raise
+        restored = False
+        if trash is not None:
             try:
                 trash.rename(app)
+                restored = True
+            except OSError:
+                pass
+        if not restored and fallback.exists():
+            try:
+                _copy_tree(fallback, app)
+                restored = True
+                print(f"替换失败，已把原版本复制回 {app}（备份保留在 {fallback.name}）")
             except OSError as exc:
-                print(
-                    f"严重：还原失败且原 app 未能放回。\n"
-                    f"  原 app 在：{trash}\n  请手动执行：mv {trash!s} {app!s}\n  （{exc}）"
-                )
+                print(f"严重：无法从备份恢复：{exc}")
+        if not restored:
+            print(
+                f"严重：Claude.app 未能自动放回。\n"
+                f"  请手动执行：ditto {fallback!s} {app!s}"
+            )
         raise
     if trash is not None:
         try:
             shutil.rmtree(trash)
         except (PermissionError, OSError):
             print(f"提示：临时目录未能自动删除，可稍后执行 sudo rm -rf {trash}")
+
+
+def restore_backup(app: Path, backup: Path) -> Path:
+    """整体换回原版备份，不修改其包内文件；成功后仍保留原备份。
+
+    与 javaht 一样，原版还原不撤补丁、不重签。区别是先复制到临时目录
+    验证再交换，避免 javaht 直接 move 唯一备份留下的失败窗口。
+    """
+    from . import integrity, signer
+
+    if not is_pristine(backup):
+        raise SystemExit(f"备份无法确认为官方原版，拒绝直接换回：{backup}")
+    with tempfile.TemporaryDirectory(prefix="claude-restore.") as td:
+        prepared = Path(td) / "Claude.app"
+        _copy_tree(backup, prepared)
+        _drop_pristine_marker(prepared)
+        problems = integrity.verify_app(prepared)
+        if problems:
+            raise SystemExit("原版备份完整性校验失败：\n" + "\n".join(problems[:8]))
+        ok, err = signer.verify(prepared)
+        if not ok:
+            raise SystemExit(f"原版备份签名校验失败：{err}")
+        swap_in(app, prepared, backup)
+    return backup
 
 
 def _at_version(items: list[Path], version: str) -> list[Path]:
@@ -273,7 +286,11 @@ def backup_kind(app: Path) -> str:
     b = best_backup(app)
     if b is None:
         return "none"
-    return "pristine" if is_pristine(b) else "patched"
+    try:
+        return "pristine" if is_pristine(b) else "patched"
+    except (OSError, ValueError, SystemExit):
+        # 备份读不出来时按「无法确认」处理，不能让状态查询崩掉
+        return "unknown"
 
 
 def latest_backup(app: Path) -> Path | None:
@@ -391,7 +408,7 @@ def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
     """清理旧备份，返回被删除的列表。
 
     规则：
-      * 不完整的备份**一律删**（留着只会在还原时坑人）
+      * 不完整的备份在其他完整候选存在时才删；否则保留一份供人工恢复
       * ``best_backup()`` 会选中的那个永不删（否则还原没得用）
       * **跟当前 Claude 版本不同的备份一律删**——包括原版备份。
         旧版本原版备份看着「无价」，实际既不能还原（会降级）
@@ -419,25 +436,32 @@ def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
     # 版本不符全部删光，真出问题时就没有可恢复的 Claude 了。
     cur_key = _current_key(app)
 
-    # 1. 不完整的、以及版本对不上的，全删（keeper 除外）
-    complete: list[Path] = []
-    for item in items:
-        if item == keeper:
-            complete.append(item)
-        elif not is_complete_backup(item):
+    # 1. 版本不符的完整备份清掉；不完整备份只在有其他完整候选时清理。
+    complete = [p for p in items if is_complete_backup(p)]
+    incomplete = [p for p in items if not is_complete_backup(p)]
+    if not complete:
+        if incomplete:
+            print(f"警告：没有完整备份，保留不完整备份供人工恢复：{incomplete[-1]}")
+        for item in incomplete[:-1]:
             drop(item)
-        elif cur_key is not None and _version_mismatch(item, cur_key):
-            drop(item)
+        return removed
+
+    same_version: list[Path] = []
+    for item in complete:
+        if item == keeper or cur_key is None or not _version_mismatch(item, cur_key):
+            same_version.append(item)
         else:
-            complete.append(item)
+            drop(item)
+    for item in incomplete:
+        drop(item)
 
     # 2. 同版本完整备份最多留 keep 个，keeper 必留
     survivors: set[Path] = {keeper} if keeper is not None else set()
-    for item in reversed(complete):            # 新 → 旧
+    for item in reversed(same_version):
         if len(survivors) >= max(keep, 1):
             break
         survivors.add(item)
-    for item in complete:
+    for item in same_version:
         if item not in survivors:
             drop(item)
 

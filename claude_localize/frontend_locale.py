@@ -85,6 +85,30 @@ class HardcodedReplacer:
         self._mapping = dict(pairs)
         self.found = 0
 
+    def _decode_source(self, raw: str) -> str | None:
+        """解析匹配到的字符串体；无法确定 JS 语义时不替换。"""
+        if "\\" not in raw:
+            return raw
+        try:
+            import json
+
+            if '"' in raw and "'" not in raw:
+                return json.loads('"' + raw + '"')
+            # 单引号串里的 \" 在 JS 中仍是 "，其余常见转义按 JSON 处理。
+            return json.loads('"' + raw.replace('\\\'', "'") + '"')
+        except (ValueError, json.JSONDecodeError):
+            return None
+
+    @staticmethod
+    def _encode_target(value: str, quote: str) -> str:
+        import json
+
+        encoded = json.dumps(value, ensure_ascii=False)[1:-1]
+        if quote == "'":
+            # JSON 保留双引号转义无害，但单引号串里 \" 会引入多余反斜杠。
+            encoded = encoded.replace('\\"', '"').replace("'", "\\'")
+        return encoded
+
     def apply(self, text: str) -> tuple[str, int]:
         if not self._mapping:
             return text, 0
@@ -100,9 +124,11 @@ class HardcodedReplacer:
                 src, quote = m.group("sq"), "'"
             dst = mapping.get(src)
             if dst is None:
+                dst = mapping.get(self._decode_source(src))
+            if dst is None:
                 return m.group(0)
             count += 1
-            return f"{quote}{dst}{quote}"
+            return quote + self._encode_target(dst, quote) + quote
 
         new = self.STRING_RE.sub(repl, text)
         self.found += count

@@ -1,15 +1,54 @@
-"""还原原样：优先用备份换回，然后把我们打进去的东西撤干净。
+"""还原英文原版：优先整体换回原版备份，必要时只修改临时副本。
 
-两条现实约束（2026-10-29 实测）：
-
-1. 备份不一定干净——它可能是上一轮汉化后的状态。只做「整体换回」，
-   Claude 打开还是中文。
-2. 撤补丁会改包内文件（app.asar 重打包、删 .lproj），
-   所以改完必须同步 plist 哈希 / 摘要槽并重新签名，否则启动即 SIGTRAP。
+普通还原采用 javaht 的思路：原版备份换回后只改 locale，不再撤补丁、
+删 lproj 或重签。不同的是先复制、验证再交换，原备份始终保留。
 """
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from . import backup, cleanup, discover, integrity, native_strings, paths, signer
+
+
+def _verify_problems(app: Path) -> list[str]:
+    problems = integrity.verify_app(app)
+    ok, err = signer.verify(app)
+    if not ok:
+        problems.append(f"签名校验失败：{err}")
+    return problems
+
+
+def _restore_patched_backup(
+    inst, b: Path, *, clean: bool, log
+) -> None:
+    """只有非原版备份时，在副本撤补丁；原版备份走 backup.restore_backup。"""
+    from . import installer
+
+    with tempfile.TemporaryDirectory(prefix="claude-restore.") as td:
+        tmp = Path(td) / "Claude.app"
+        backup._copy_tree(b, tmp)
+        backup._drop_pristine_marker(tmp)
+        layout = integrity.probe_layout(tmp)
+        if layout:
+            raise SystemExit(
+                "撤补丁前的完整性预检未通过，未修改真实 app：\n"
+                + "\n".join(f"  ✗ {p}" for p in layout)
+                + "\n请重装官方 Claude。"
+            )
+        installer.strip_patch(tmp, paths.TARGET_LOCALE, log=log, pin_locale="en-US")
+        native_strings.remove(tmp, log=log)
+        if clean:
+            cleanup.clean(tmp, log=log)
+        signer.clear_quarantine(tmp)
+        signer.resign(tmp)
+        problems = _verify_problems(tmp)
+        if problems:
+            raise SystemExit(
+                "还原副本未通过验证，真实 app 未修改：\n"
+                + "\n".join(f"  ✗ {p}" for p in problems[:8])
+            )
+        backup.swap_in(inst.app, tmp, b)
 
 
 def restore(
@@ -19,8 +58,6 @@ def restore(
     """返回 "already"（本来就是原版）/ "dry-run" / "restored"。"""
     log = print if verbose else (lambda *a, **k: None)
     inst = discover.detect()
-    lang = paths.TARGET_LOCALE
-
     b = backup.best_backup(inst.app)
     patched = discover.is_patched(inst)
 
@@ -31,66 +68,47 @@ def restore(
         return "already"
 
     cur_ver = backup.bundle_version(inst.app)
-    bak_ver = backup.bundle_version(b) if b is not None else cur_ver
     if b is not None:
+        bak_ver = backup.bundle_version(b)
         if backup.version_key(bak_ver) < backup.version_key(cur_ver):
             raise SystemExit(
                 f"备份版本 {bak_ver} 低于当前版本 {cur_ver}，恢复会导致降级。\n"
-                "请改为重新安装 Claude，或使用对应版本的备份。"
+                "请重新安装官方 Claude。"
             )
         if not backup.is_complete_backup(b):
             raise SystemExit(f"备份不完整，无法安全还原：{b}")
+        pristine = backup.is_pristine(b)
+        if not pristine:
+            log("这份备份含汉化内容，将只在临时副本撤补丁，原备份保留。")
+    else:
+        if not patched:
+            log("当前已是官方原版，没有需要还原的补丁。")
+            if launch:
+                inst.launch()
+            return "already"
+        raise SystemExit(
+            "没有同版本的可用备份，拒绝直接修改当前 Claude。\n"
+            "请重新安装官方 Claude；它同时会移除本工具及历史补丁。"
+        )
 
     if dry_run:
-        log(f"[dry-run] 备份：{b or '无（直接就地撤补丁）'}")
-        log("[dry-run] 将换回备份、撤掉外壳语言文件/DOM 注入/原生字符串，重签名，locale 改回 en-US")
+        log(f"[dry-run] 备份：{b}")
+        log("[dry-run] 将复制到临时目录验证后交换，原备份保留；成功后才写 locale en-US")
         return "dry-run"
 
     if inst.is_running():
         log("退出 Claude…")
-        inst.quit()
+        if not inst.quit(wait=True):
+            raise SystemExit("Claude 未能退出，请手动退出后重试")
 
-    if b is not None:
-        if not backup.is_pristine(b):
-            log("注意：这份备份本身是汉化状态，还原后可能仍有残留（javaht 硬编码替换无法还原）")
-        log(f"从备份恢复：{b}（版本 {bak_ver}）")
+    log(f"从备份恢复：{b}")
+    if backup.is_pristine(b):
         backup.restore_backup(inst.app, b)
     else:
-        log("没有可用备份：直接在现有 app 上撤掉补丁")
+        _restore_patched_backup(inst, b, clean=clean, log=log)
 
-    # 备份本身可能就是汉化状态，必须主动撤掉我们打进去的东西
-    changed = False
-    try:
-        from . import installer
-
-        changed = installer.strip_patch(inst.app, lang, log=log, pin_locale="en-US")
-    except SystemExit as exc:
-        log(f"警告：撤除 app.asar 补丁失败（{exc}）")
-
-    removed_native = native_strings.remove(inst.app, log=log)
-    if clean:
-        cleanup.clean(inst.app, log=log)
-
-    signer.clear_quarantine(inst.app)
-    if changed or removed_native:
-        log("包内容有改动，重新签名…")
-        signer.resign(inst.app)
-
-    problems = integrity.verify_app(inst.app)
-    if problems:
-        for item in problems[:8]:
-            log(f"  ✗ {item}")
-        raise SystemExit(
-            "还原后的 app 完整性校验未通过，Claude 会启动崩溃。\n"
-            "建议重装官方 Claude。"
-        )
-    ok, err = signer.verify(inst.app)
-    if not ok:
-        raise SystemExit(f"还原后签名校验失败：{err}\n建议重装官方 Claude。")
-
-    log("完整性 + 签名校验：通过")
     inst.write_locale("en-US")
-    log("已还原为英文。重新打开 Claude 生效。")
+    log("已还原为英文。原备份仍保留。")
     if launch:
         inst.launch()
     return "restored"

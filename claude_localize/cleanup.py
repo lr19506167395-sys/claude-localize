@@ -136,6 +136,11 @@ def clean(app: Path, *, dry_run: bool = False, log=print) -> list[Residue]:
     if not items:
         return []
     for item in items:
+        if item.kind == "broken-backup":
+            # 半截备份不能直接换回，但仍可能包含唯一的原始资源。
+            # 与 javaht 的「仅还原完整备份」不同，这里不因不可还原就删除。
+            log(f"保留不完整备份，请人工检查：{item.path}（{item.detail}）")
+            continue
         if dry_run:
             log(f"[dry-run] 将清理 {item.path}（{item.detail}）")
             continue

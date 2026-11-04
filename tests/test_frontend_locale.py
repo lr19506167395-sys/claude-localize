@@ -82,6 +82,20 @@ class HardcodedTests(unittest.TestCase):
         self.assertIn("他大声说设置", out)
         self.assertTrue(out.startswith('msg = "'))
 
+    def test_escapes_translation_for_original_quote_style(self):
+        target = '他说"你好"\n再会\\'
+        for text, expected in (
+            ('"Hello world"', '"他说\\"你好\\"\\n再会\\\\"'),
+            ("'Hello world'", "'他说\"你好\"\\n再会\\\\'"),
+        ):
+            out, n = locale.HardcodedReplacer([["Hello world", target]]).apply(text)
+            self.assertEqual(n, 1)
+            self.assertEqual(out, expected)
+
+    def test_single_quoted_translation_escapes_quote(self):
+        out, n = locale.HardcodedReplacer([["Hello world", "这是'中文'"]]).apply("'Hello world'")
+        self.assertEqual((out, n), ("'这是\\'中文\\''", 1))
+
     def test_structural_identifiers_skipped(self):
         replacer = locale.HardcodedReplacer([["Settings", "设置"]])
         # 纯标识符规则默认被过滤掉

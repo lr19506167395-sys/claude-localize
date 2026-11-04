@@ -109,6 +109,26 @@ class VerifyAppTests(unittest.TestCase):
         (self.app / "Contents" / "Info.plist").write_bytes(_plist(b""))
         self.assertTrue(integrity.verify_app(self.app))
 
+    def test_missing_framework_fails_slot_verification(self):
+        ok, msg = integrity.verify_digest_slot(self.app, {"Resources/app.asar": {}})
+        self.assertFalse(ok)
+        self.assertIn("Framework", msg)
+
+    def test_missing_slot_fails_slot_verification(self):
+        framework = self.app / integrity.ELECTRON_FRAMEWORK_REL
+        framework.parent.mkdir(parents=True)
+        framework.write_bytes(b"not a supported Electron build")
+        ok, msg = integrity.verify_digest_slot(self.app, {"Resources/app.asar": {}})
+        self.assertFalse(ok)
+        self.assertIn("摘要槽", msg)
+
+    def test_unused_slot_fails_slot_verification(self):
+        framework = self.app / integrity.ELECTRON_FRAMEWORK_REL
+        framework.parent.mkdir(parents=True)
+        framework.write_bytes(integrity.INTEGRITY_DIGEST_SENTINEL + b"\0\0" + b"\0" * 32)
+        ok, _ = integrity.verify_digest_slot(self.app, {"Resources/app.asar": {}})
+        self.assertFalse(ok)
+
 
 class BlockIntegrityTests(unittest.TestCase):
     def test_first_bad_block_detected(self):

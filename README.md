@@ -57,12 +57,13 @@ cd claude-localize
 - **动态词表**：`i18n/dynamic/zh-CN.json`（模型描述等）
 - **斜杠命令双语菜单**：`/help 帮助与支持`，只改显示层，命令 ID / 搜索 / 点击行为不变
   （移植自 javaht，49 条 gloss 词表随包分发，恢复原样时可精确撤回）
-- **完整回滚**：安装前整包备份，一条命令还原。还原只做整体替换、**不改包内任何文件**
-  （删包内被签名的资源会让签名封条失效，Claude 启动即 SIGTRAP）；
-  想清历史残留用 `restore --clean` 或菜单里的「清理安装残留」，两者都会重新签名
+- **完整回滚**：安装前整包备份，一条命令还原。原版还原**整体换回备份**，
+  换回后只改 locale，不再改动包内文件；原备份在还原成功后仍然保留。
+  没有可用备份时不会擅自修改当前 Claude，而是提示重装官方 Claude
 - **备份按版本管理**：还原只用**当前 Claude 版本**的备份，绝不拿旧版本顶上（那等于降级）；
   旧版本的备份在下次安装时自动清掉，不会越积越多
-- **残留清理**：javaht/旧版留下的散装 `zh-CN.json`、中断的解包目录、半截备份
+- **残留清理**：javaht/旧版留下的散装 `zh-CN.json`、中断的解包目录；
+  **不完整备份只报告、不自动删除**，留待人工检查
 - **隔离验证**：`tools/isolated_verify.py` 在临时副本上跑完整流程再逐层校验
 
 ## 菜单栏 App
@@ -124,8 +125,8 @@ claude-localize install --dry-run
 claude-localize status    # 状态：覆盖率、外壳白名单、残留
 claude-localize verify    # 安装后自检
 claude-localize clean     # 清理历史残留（删到包内文件会自动重签名）
-claude-localize restore   # 还原成英文（整体换回备份，零改动）
-claude-localize restore --clean   # 还原并顺带清掉备份里的历史残留（会重签名）
+claude-localize restore   # 还原成英文（整体换回原版备份，原备份保留）
+claude-localize restore --clean   # 清理包内残留后再还原（在临时副本上完成并重签名）
 ```
 
 ## 更新词表

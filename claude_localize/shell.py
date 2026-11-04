@@ -79,7 +79,7 @@ def has_artifacts(app_asar: Path, lang: str = "zh-CN") -> bool:
         return False
     try:
         _hs, _s, header = asar.read_header_file(app_asar)
-    except Exception:
+    except (OSError, ValueError, SystemExit):
         return False
     if asar.find_entry(header, f"resources/i18n/{lang}.json") is not None:
         return True

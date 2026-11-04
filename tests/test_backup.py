@@ -9,7 +9,7 @@ from unittest import mock
 
 from helpers import make_app
 
-from claude_localize import backup
+from claude_localize import backup, integrity, signer
 
 
 def _touch_backup(base: Path, stamp: str, version: str, complete: bool = True) -> Path:
@@ -210,6 +210,14 @@ class SwapInTests(unittest.TestCase):
         (app / "Contents" / "Info.plist").write_text(f"<plist><dict/><!--{tag}--></plist>")
         return app
 
+    def test_keeps_only_incomplete_backup(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = make_app(base)
+            broken = _touch_backup(base, "zh-1", "4.29.0", complete=False)
+            backup.prune_old_backups(app, keep=1)
+            self.assertTrue(broken.exists(), "唯一不完整副本也不能自动删除")
+
     def test_restores_old_app_when_swap_fails(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -231,6 +239,26 @@ class SwapInTests(unittest.TestCase):
             self.assertTrue(app.exists(), "Claude.app 不能凭空消失")
             self.assertIn("LIVE", (app / "Contents" / "Info.plist").read_text())
             self.assertTrue(b.exists(), "回滚不能把备份消耗掉")
+
+    def test_restores_from_fallback_when_trash_restore_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            app = self._make(base, "Claude.app", "LIVE")
+            patched = self._make(base, "patched.app", "PATCHED")
+            fallback = self._make(base, "fallback.app", "FALLBACK")
+            real = Path.rename
+
+            def flaky(self, target):
+                if Path(target).name == "Claude.app" and self.name in ("patched.app", "Claude.app.replaced"):
+                    raise OSError("模拟改名失败")
+                return real(self, target)
+
+            with mock.patch.object(Path, "rename", flaky):
+                with self.assertRaises(OSError):
+                    backup.swap_in(app, patched, fallback)
+            self.assertTrue(app.exists())
+            self.assertIn("FALLBACK", (app / "Contents" / "Info.plist").read_text())
+            self.assertTrue(fallback.exists())
 
     def test_normal_swap_replaces_app(self):
         with tempfile.TemporaryDirectory() as td:
@@ -316,5 +344,9 @@ class PristineTests(unittest.TestCase):
             app = make_app(base)
             b = backup.create_backup(app, pristine=True)
             self.assertTrue(backup.is_pristine(b))
-            backup.restore_backup(app, b)
+            with mock.patch.object(integrity, "verify_app", return_value=[]), \
+                    mock.patch.object(signer, "verify", return_value=(True, "")):
+                backup.restore_backup(app, b)
             self.assertFalse((app / backup.PRISTINE_MARKER).exists(), "标记不能带进 Claude.app")
+            self.assertTrue(b.exists(), "换回后原备份仍保留")
+            self.assertTrue(backup.is_pristine(b), "原备份的标记也不能被消费")

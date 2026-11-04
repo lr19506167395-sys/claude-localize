@@ -125,7 +125,11 @@ def _sign_one(
 
 def resign(app: Path) -> dict[str, int]:
     """对整个 app 做 ad-hoc 重签名，保留 entitlements。"""
-    ent_dir = Path(tempfile.mkdtemp(prefix="claude-zh-ent."))
+    with tempfile.TemporaryDirectory(prefix="claude-zh-ent.") as ent_dir:
+        return _resign_into(app, Path(ent_dir))
+
+
+def _resign_into(app: Path, ent_dir: Path) -> dict[str, int]:
     files, bundles = signable_files(app)
     stats = {"signed": 0, "failed": 0}
 

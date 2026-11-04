@@ -157,20 +157,26 @@ class ClaudeLocalizeMenu(rumps.App):
             if self.busy:
                 rumps.notification("Claude 汉化", "请稍候", "已有任务进行中")
                 return
-            if with_asar and not self.settings.get("shell_risk_ack"):
-                ok, remember = self._confirm_shell_risk()
-                if not ok:
-                    return
-                if remember:
-                    self.settings["shell_risk_ack"] = True
-                    _save_settings(self.settings)
+            # busy 必须同步写；只通过 _ui() 更新按钮仍有重复点击窗口。
+            self.busy = True
+            self._set_busy(True)
+            try:
+                if with_asar and not self.settings.get("shell_risk_ack"):
+                    ok, remember = self._confirm_shell_risk()
+                    if not ok:
+                        self._set_busy(False)
+                        return
+                    if remember:
+                        self.settings["shell_risk_ack"] = True
+                        _save_settings(self.settings)
 
-            self.settings["shell_enhance"] = with_asar
-            _save_settings(self.settings)
-            base = "1. 中文补丁：主界面 + 外壳" if with_asar else "1. 中文补丁：主界面"
-            # 风险弹窗是在菜单回调里跑的，直接接着做重活容易卡在菜单跟踪里；
-            # 丢到下一个 runloop 再开始，稳妥得多。
-            self._ui(lambda: self._run_install(with_asar, self.install_item, base))
+                self.settings["shell_enhance"] = with_asar
+                _save_settings(self.settings)
+                base = "1. 中文补丁：主界面 + 外壳" if with_asar else "1. 中文补丁：主界面"
+                self._ui(lambda: self._run_install(with_asar, self.install_item, base, claimed=True))
+            except BaseException:
+                self._set_busy(False)
+                raise
         except BaseException as exc:
             self._log_exc("_apply_mode", exc)
             try:
@@ -221,12 +227,22 @@ class ClaudeLocalizeMenu(rumps.App):
 
         def run():
             inst = discover.detect()
-            items = cleanup.clean_and_resign(inst.app)
-            return [i for i in items if i.removed]
+            return cleanup.clean_and_resign(inst.app)
+
+        def finish(items) -> tuple[str, str]:
+            removed = [i for i in items if i.removed]
+            kept = [i for i in items if not i.removed]
+            if kept:
+                return (
+                    "清理完成",
+                    f"已清理 {len(removed)} 项，保留 {len(kept)} 项（不完整备份请人工检查）"
+                    if removed
+                    else f"保留 {len(kept)} 项：不完整备份需人工检查",
+                )
+            return ("清理完成", f"已清理 {len(removed)} 项" if removed else "没有可清理的残留")
 
         self._background(
-            "清理安装残留", run,
-            lambda items: ("清理完成", f"已清理 {len(items)} 项" if items else "没有可清理的残留"),
+            "清理安装残留", run, finish,
             item=self.clean_item, base_title="* 清理安装残留",
         )
 
@@ -252,6 +268,8 @@ class ClaudeLocalizeMenu(rumps.App):
                 tail += " · 备份:原版"
             elif kind == "patched":
                 tail += " · 备份:已汉化"
+            elif kind == "unknown":
+                tail += " · 备份:无法确认"
             title = f"状态：{inst.version} · {tail}"
         except Exception as exc:
             title = f"状态：{exc}"
@@ -310,13 +328,14 @@ class ClaudeLocalizeMenu(rumps.App):
 
     def _background(
         self, label: str, fn, on_success=None, *,
-        item=None, base_title: str | None = None, spinner: bool = True,
+        item=None, base_title: str | None = None, spinner: bool = True, claimed: bool = False,
     ):
-        """后台跑任务；运行中在菜单项上显示进度，结束不管成败都留一条记录。"""
-        if self.busy:
-            rumps.notification("Claude 汉化", "请稍候", "已有任务进行中")
-            return
-        self._set_busy(True)
+        """后台跑任务；claimed=True 表示菜单回调已原子占位。"""
+        if not claimed:
+            if self.busy:
+                rumps.notification("Claude 汉化", "请稍候", "已有任务进行中")
+                return
+            self._set_busy(True)
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         log = LOG_DIR / "latest.log"
         log.write_text(f"开始：{label}\n", encoding="utf-8")
@@ -411,11 +430,18 @@ class ClaudeLocalizeMenu(rumps.App):
     def _set_last(self, text: str) -> None:
         self._ui(lambda: setattr(self.last_item, "title", text))
 
-    def _run_install(self, with_asar: bool, item, base_title: str, *, mark_stamp: bool = True):
-        """安装流程。两种模式共用这一条已验证的路径。"""
+    def _run_install(self, with_asar: bool, item, base_title: str, *, mark_stamp: bool = True,
+                     claimed: bool = False):
+        """安装流程。_apply_mode 已占位；直接调用时在这里原子占位。"""
         from . import discover, installer
 
         import time as _time
+
+        if not claimed:
+            if self.busy:
+                rumps.notification("Claude 汉化", "请稍候", "已有任务进行中")
+                return
+            self._set_busy(True)
 
         last_update = [0.0]
 
@@ -466,7 +492,7 @@ class ClaudeLocalizeMenu(rumps.App):
 
         self._background(
             base_title.lstrip("* "), run, finish,
-            item=item, base_title=base_title, spinner=False,
+            item=item, base_title=base_title, spinner=False, claimed=True,
         )
 
     def _restore(self, sender):

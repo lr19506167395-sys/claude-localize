@@ -131,7 +131,7 @@ def status(verbose: bool = True) -> dict:
         print(f"当前语言       : {info['locale']}")
         print(f"补丁状态       : {'已打补丁' if patched else '未打补丁'}")
         if info["backup"]:
-            kind = {"pristine": "官方原版", "patched": "已汉化"}.get(
+            kind = {"pristine": "官方原版", "patched": "已汉化", "unknown": "无法确认"}.get(
                 info["backup_kind"], "未知"
             )
             print(f"备份           : {info['backup']}（{kind}）")

@@ -137,6 +137,26 @@ class MenuBarTests(unittest.TestCase):
         self.assertFalse(self.app.mode_simple.hidden)
         self.assertFalse(self.app.mode_shell.hidden)
 
+    def test_apply_mode_claims_before_deferred_install(self):
+        self.app.settings["shell_risk_ack"] = True
+        queued = []
+        calls = []
+        self.app._ui = queued.append
+        self.app._background = lambda *a, **k: calls.append(k)
+        self.app._apply_mode(False)
+        self.app._apply_mode(False)
+        installs = [fn for fn in queued if fn.__name__ == "<lambda>"]
+        self.assertEqual(len(installs), 1, "两次点击只能有一个安装任务")
+        installs[0]()
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0]["claimed"])
+
+    def test_cancelled_risk_releases_claim(self):
+        self.app.settings["shell_risk_ack"] = False
+        self.app._confirm_shell_risk = lambda: (False, False)
+        self.app._apply_mode(True)
+        self.assertFalse(self.app.busy)
+
     def test_apply_mode_starts_install(self):
         self.app.settings["shell_risk_ack"] = True  # 跳过风险弹窗
         calls = []

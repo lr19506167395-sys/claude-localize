@@ -643,6 +643,22 @@ def _copy_light(src: Path, dst: Path) -> None:
             shutil.copytree(unpacked, res_dst / f"{name}.unpacked", symlinks=True,
                             dirs_exist_ok=True)
 
+    # 摘要槽在 Framework 二进制里；轻量副本也必须带它及签名/权限所需资源，
+    # 否则 dry-run 会在与真实安装无关的地方失败。
+    framework = src / "Contents" / "Frameworks" / "Electron Framework.framework"
+    if framework.exists():
+        shutil.copytree(
+            framework,
+            dst / "Contents" / "Frameworks" / "Electron Framework.framework",
+            symlinks=True,
+        )
+    for rel in ("_CodeSignature", "CodeResources"):
+        p = src / "Contents" / rel
+        if p.is_dir():
+            shutil.copytree(p, dst / "Contents" / rel, symlinks=True)
+        elif p.is_file():
+            shutil.copy2(p, dst / "Contents" / rel)
+
     ion_dir = res_src / "ion-dist"
     if ion_dir.is_dir():
         shutil.copytree(ion_dir, res_dst / "ion-dist", symlinks=True, dirs_exist_ok=True)

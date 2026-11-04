@@ -194,15 +194,18 @@ def sync_digest_slot(app: Path, integrity: dict | None = None) -> int:
 
 
 def verify_digest_slot(app: Path, integrity: dict | None = None) -> tuple[bool, str]:
-    """校验二进制槽位与 plist 字典是否一致。没有槽位时视为通过。"""
+    """严格校验摘要槽；声明了字典就必须实际验到至少一个启用槽。
+
+    无槽位不能放行：Electron 改变布局时，静默通过会放过启动即 SIGTRAP 的包。
+    """
     if integrity is None:
         integrity = read_dictionary(app)
     if not integrity:
-        return True, ""
+        return False, "Info.plist 里没有 ElectronAsarIntegrity"
 
     framework = app / ELECTRON_FRAMEWORK_REL
     if not framework.is_file():
-        return True, ""
+        return False, "找不到 Electron Framework，无法校验摘要槽"
 
     expected = compute_dictionary_digest(integrity)
     data = framework.read_bytes()
@@ -221,7 +224,9 @@ def verify_digest_slot(app: Path, integrity: dict | None = None) -> tuple[bool, 
                 return False, f"Framework 摘要槽不匹配（{actual[:12]}… ≠ {expected[:12]}…）"
             checked += 1
         start = index + 1
-    return True, f"已校验 {checked} 个槽" if checked else "无槽位"
+    if not checked:
+        return False, "Framework 里没有可用的已启用摘要槽"
+    return True, f"已校验 {checked} 个槽"
 
 
 def probe_layout(app: Path) -> list[str]:
