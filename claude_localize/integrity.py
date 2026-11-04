@@ -330,7 +330,10 @@ def verify_app(app: Path, *, deep: bool = True) -> list[str]:
             continue
         try:
             data, header_size, header = asar.load(path)
-        except Exception as exc:
+        except (SystemExit, Exception) as exc:
+            # asar.load 对损坏文件直接 SystemExit（BaseException，原有 except
+            # Exception 接不住）；这里必须守住「返回问题列表」的契约，
+            # 否则还原流程会以异常退出，拿不到可读结论。
             problems.append(f"{rel} 无法解析：{exc}")
             continue
 

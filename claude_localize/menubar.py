@@ -157,8 +157,8 @@ class ClaudeLocalizeMenu(rumps.App):
             if self.busy:
                 rumps.notification("Claude 汉化", "请稍候", "已有任务进行中")
                 return
-            # busy 必须同步写；只通过 _ui() 更新按钮仍有重复点击窗口。
-            self.busy = True
+            # busy 必须同步写；_set_busy 内部会写 self.busy，
+            # 只走 _ui() 更新按钮仍会留下重复点击窗口。
             self._set_busy(True)
             try:
                 if with_asar and not self.settings.get("shell_risk_ack"):

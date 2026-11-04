@@ -543,11 +543,24 @@ def strip_patch(app: Path, lang: str, log=print, *, pin_locale: str | None = Non
     ``pin_locale`` 给定时，会额外留一行脚本把前端 localStorage 里的
     ``spa:locale`` 改回该语言（否则 web 端会一直沿用缓存里的 zh-CN）。
     返回是否真的改动了包。
+
+    改 asar 前自己做一次布局预检：这是公开函数，不能指望每个调用方都记得
+    先跑 probe_layout()——漏掉一次，Electron 就会在启动时 SIGTRAP 且无日志。
     """
     changed = False
 
     asar_path = app / frontend_bundle.APP_ASAR
-    if shell.has_artifacts(asar_path, lang) or pin_locale is not None:
+    needs_rebuild = (
+        asar_path.is_file()
+        and (shell.has_artifacts(asar_path, lang) or pin_locale is not None)
+    )
+    if needs_rebuild:
+        layout = integrity.probe_layout(app)
+        if layout:
+            raise SystemExit(
+                "完整性结构与本工具预期不符，拒绝撤补丁（未修改任何文件）：\n"
+                + "\n".join(f"  ✗ {p}" for p in layout)
+            )
         with frontend_bundle.AppAsarTarget(app) as work:
             if work is not None:
                 if shell.has_artifacts(asar_path, lang):

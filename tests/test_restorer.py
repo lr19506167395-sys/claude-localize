@@ -22,6 +22,19 @@ class RestoreTests(unittest.TestCase):
         self.assertNotIn("b.rename(inst.app)", source)
         self.assertNotIn("b.rename(app)", source)
 
+    def test_strip_patch_preflights_itself(self):
+        """strip_patch 是公开函数，必须自己预检——不能指望调用方记得。"""
+        from claude_localize import installer
+
+        with mock.patch.object(integrity, "probe_layout", return_value=["no slot"]), \
+                mock.patch.object(installer, "shell") as shell_mod, \
+                mock.patch.object(installer.frontend_bundle, "AppAsarTarget") as target:
+            shell_mod.has_artifacts.return_value = True
+            self.app.joinpath("Contents", "Resources", "app.asar").write_bytes(b"x")
+            with self.assertRaises(SystemExit):
+                installer.strip_patch(self.app, "zh-CN", log=lambda *a: None)
+            target.assert_not_called()
+
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.base = Path(self._td.name)

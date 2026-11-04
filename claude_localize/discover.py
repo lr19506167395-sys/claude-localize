@@ -40,9 +40,39 @@ class ClaudeInstall:
     def asar(self) -> Path:
         return paths.asar_path(self.app)
 
+    def main_pids(self) -> list[int]:
+        """Claude 主进程 PID（不含 Helper / 渲染 / GPU 等子进程）。
+
+        不能用 ``pgrep -x Claude``：macOS 上 ``comm`` 回的是可执行文件完整路径
+        （``/Applications/Claude.app/Contents/MacOS/Claude``），精确匹配进程名
+        永远失败；``pgrep -f`` 对这条命令行同样匹配不到。后果很严重——
+        ``is_running()`` 恒为 False，安装会跳过「退出 Claude」，
+        磁盘上的 asar 被换掉但运行中的进程继续用内存里的旧版本。
+        """
+        try:
+            r = subprocess.run(
+                ["ps", "-ax", "-o", "pid=,comm="], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        pids = []
+        for line in r.stdout.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) != 2:
+                continue
+            pid, comm = parts
+            path = Path(comm)
+            # 主进程的可执行文件必须叫 Claude（不是 "Claude Helper"），
+            # 且属于我们要操作的那个 .app，避免误伤别的 Claude 副本。
+            if path.name != "Claude" or path.parent.name != "MacOS":
+                continue
+            if path.parent.parent.parent.name != self.app.name:
+                continue
+            pids.append(int(pid))
+        return pids
+
     def is_running(self) -> bool:
-        r = subprocess.run(["pgrep", "-x", "Claude"], capture_output=True)
-        return r.returncode == 0
+        return bool(self.main_pids())
 
     def quit(self, wait: bool = True, timeout: float = 30.0) -> bool:
         """退出 Claude，并等待进程真正消失。
@@ -70,8 +100,9 @@ class ClaudeInstall:
                 return True
             time.sleep(0.3)
 
-        # 宽限期过了还在跑，强制结束
-        subprocess.run(["pkill", "-x", "Claude"], capture_output=True)
+        # 宽限期过了还在跑，强制结束（只杀主进程，别碰 Helper）
+        for pid in self.main_pids():
+            subprocess.run(["kill", "-TERM", str(pid)], capture_output=True)
         deadline = time.time() + 10
         while time.time() < deadline:
             if not self.is_running():

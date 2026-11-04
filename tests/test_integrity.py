@@ -109,6 +109,17 @@ class VerifyAppTests(unittest.TestCase):
         (self.app / "Contents" / "Info.plist").write_bytes(_plist(b""))
         self.assertTrue(integrity.verify_app(self.app))
 
+    def test_corrupt_asar_returns_problems_not_systemexit(self):
+        """asar.load 对损坏文件抛 SystemExit（BaseException），
+        不能被它穿透——这个函数承诺「返回问题列表」。"""
+        (self.app / "Contents" / "Info.plist").write_bytes(
+            _with_integrity(_dict_entry("Resources/app.asar"))
+        )
+        (self.app / "Contents" / "Resources" / "app.asar").write_bytes(b"garbage")
+        problems = integrity.verify_app(self.app)
+        self.assertTrue(problems)
+        self.assertTrue(any("无法解析" in p for p in problems), problems)
+
     def test_missing_framework_fails_slot_verification(self):
         ok, msg = integrity.verify_digest_slot(self.app, {"Resources/app.asar": {}})
         self.assertFalse(ok)
