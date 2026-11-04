@@ -345,8 +345,10 @@ class PristineTests(unittest.TestCase):
             b = backup.create_backup(app, pristine=True)
             self.assertTrue(backup.is_pristine(b))
             with mock.patch.object(integrity, "verify_app", return_value=[]), \
+                    mock.patch.object(signer, "team_identifier", return_value="Q6L2SF6YDW"), \
                     mock.patch.object(signer, "verify", return_value=(True, "")):
                 backup.restore_backup(app, b)
             self.assertFalse((app / backup.PRISTINE_MARKER).exists(), "标记不能带进 Claude.app")
+            self.assertFalse(backup._marker_path(app).exists(), "旁挂标记也不能留在 Claude.app 旁边")
             self.assertTrue(b.exists(), "换回后原备份仍保留")
             self.assertTrue(backup.is_pristine(b), "原备份的标记也不能被消费")

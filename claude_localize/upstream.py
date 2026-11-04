@@ -76,8 +76,11 @@ def check_remote(ref: str = "main") -> dict[str, Any]:
 
 
 def _validate(name: str, data: Any) -> None:
-    if not isinstance(data, dict):
-        raise SystemExit(f"{name} 不是 JSON 对象")
+    # hardcoded.json 上游是「[[原文, 译文], …]」数组，其余词表是对象。
+    # 早期只接受 dict，导致 hardcoded 一拉就报「不是 JSON 对象」，
+    # pull-upstream 永远走不到写入那一步。
+    if not isinstance(data, (dict, list)):
+        raise SystemExit(f"{name} 不是 JSON 对象或数组")
     need = MIN_COUNTS.get(name)
     if need and len(data) < need:
         raise SystemExit(f"{name} 条目数 {len(data)} 低于预期 {need}，拒绝写入")

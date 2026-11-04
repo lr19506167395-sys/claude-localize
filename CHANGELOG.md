@@ -1,5 +1,41 @@
 # 更新日志
 
+## 1.0.3
+
+修复原版备份的代码签名封条被自家标记破坏的问题。
+
+### 修复
+
+- **原版标记不再写进 `.app` 包内**：`.app` 顶层同样在代码签名封条范围内，
+  原先写在包内的 `.claude-localize-pristine` 会让备份变成
+  "unsealed contents present in the bundle root"，`codesign --verify --deep --strict`
+  直接失败，于是备份再也无法被证明是干净的官方包，整体换回被自己拦下。
+  标记改为写在同级的旁挂文件 `<app>.claude-localize-pristine`。
+- **整体换回增加封条门禁**：`restore_backup()` 现在要求「完整 + 原版 + 封条有效 +
+  官方签名」四项同时成立，任何一项不成立就拒绝，并提示改走撤补丁路径。
+  换回一个封条已破的包比不换回更糟。
+- **兼容旧标记**：包内旧标记仍会被读取和清理，迁移不需要手工操作；
+  换回时会把两种标记都从副本里删掉，不会带进 `Claude.app`。
+- **菜单栏启动变慢**（回归自 1.0.2）：`slashmenu.has_marker_in_asar()` 原先对每个
+  `.js` 条目都重新解析 1.28MB 的 asar header，4000 多个条目是 O(n²)，
+  实测 12–16 秒；状态栏刷新同步调用它，菜单栏图标因此几十秒不出现。
+  改为只解析一次 header、按 offset 逐条 seek，实测 12.57s → 0.085s；
+  `is_pristine()` 增加 mtime 指纹缓存，首次状态检查移入后台线程。
+- **`pull-upstream` 拉不动 hardcoded 词表**：上游的
+  `frontend-hardcoded-zh-CN.json` 是 `[[原文, 译文], …]` 数组，
+  而校验只接受对象，直接报「不是 JSON 对象」，永远写不进去。
+- **`claude-localize validate` 崩溃**：缺 `discover` 导入，抛
+  `UnboundLocalError`。
+- **`signer.resign()` 遗留空临时目录**：改用 `TemporaryDirectory`。
+
+### 验证
+
+- 140 个单元测试全部通过
+- `tools/isolated_verify.py` 通过
+- `tools/verify_restore_cycle.py` 在临时副本上验证「安装 → 还原 → 再安装」通过
+- 词表更新至 41,771 条（主界面）/ 1,112 条（桌面层），
+  校验误报从 27 条降到 16 条（其中 13 条为上游数据本身错误）
+
 ## 1.0.2
 
 按外部全流程审查修复还原与清理的数据安全问题。

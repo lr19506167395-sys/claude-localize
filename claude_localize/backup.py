@@ -9,9 +9,22 @@ from pathlib import Path
 
 
 BACKUP_GLOB = "Claude.backup-before-zh-*.app"
-# 备份里放一个标记文件，说明「这份备份是官方原版」。
-# 还原前会把它删掉，所以不会污染包内容、也不会影响签名封条。
+# 标记写在与 .app **同级**的旁挂文件里，不能写进包内：
+# .app 顶层也在代码签名封条范围内，往里面加文件会让备份变成
+# "unsealed contents present in the bundle root"，封条一旦破了，
+# 还原时就没法用 codesign --verify 证明这个包是完整的。
 PRISTINE_MARKER = ".claude-localize-pristine"
+PRISTINE_SUFFIX = ".claude-localize-pristine"
+
+
+def _marker_path(app: Path) -> Path:
+    """标记文件的真实位置：`Claude.app` → `Claude.app.claude-localize-pristine`。"""
+    return app.with_name(app.name + PRISTINE_SUFFIX)
+
+
+def _legacy_marker(app: Path) -> Path:
+    """旧版写在包内的标记（会破坏封条），仅用于兼容读取与清理。"""
+    return app / PRISTINE_MARKER
 
 _SIGNED_CACHE: dict[tuple[str, int], tuple[bool, bool]] = {}
 _VERSION_CACHE: dict[tuple[str, int], str] = {}
@@ -82,22 +95,24 @@ def is_pristine(path: Path) -> bool:
 def _pristine_stamp(path: Path) -> int:
     """用于缓存失效的指纹：标记文件与几个关键资源的 mtime。"""
     stamp = 0
-    for rel in (
-        PRISTINE_MARKER,
-        "Contents/Info.plist",
-        "Contents/_CodeSignature/CodeResources",
-        "Contents/Resources/app.asar",
-        "Contents/Resources/ion-dist.asar",
+    for p in (
+        _marker_path(path),
+        _legacy_marker(path),
+        path / "Contents/Info.plist",
+        path / "Contents/_CodeSignature/CodeResources",
+        path / "Contents/Resources/app.asar",
+        path / "Contents/Resources/ion-dist.asar",
     ):
         try:
-            stamp ^= (path / rel).stat().st_mtime_ns
+            stamp ^= p.stat().st_mtime_ns
         except OSError:
             continue
     return stamp
 
 
 def _pristine_uncached(path: Path) -> bool:
-    if (path / PRISTINE_MARKER).is_file():
+    # 旁挂标记：信任它，但仍要求内容干净（防止上一个版本写坏的标记）
+    if _marker_path(path).is_file() or _legacy_marker(path).is_file():
         try:
             return _has_no_patch_content(path)
         except (OSError, ValueError, SystemExit):
@@ -125,20 +140,27 @@ def _has_no_patch_content(path: Path) -> bool:
 
 
 def mark_pristine(path: Path, note: str = "official") -> None:
+    """在 .app **外面**写一个旁挂标记。
+
+    绝不写进包内：那会破坏代码签名封条，让备份变成「无法验证」的包。
+    """
     try:
-        (path / PRISTINE_MARKER).write_text(note + "\n", encoding="utf-8")
+        _marker_path(path).write_text(note + "\n", encoding="utf-8")
     except OSError:
         pass
 
 
 def _drop_pristine_marker(path: Path) -> None:
-    """换回原位前去掉标记，否则它会被带进 Claude.app 里。"""
-    marker = path / PRISTINE_MARKER
-    if marker.exists():
-        try:
-            marker.unlink()
-        except OSError:
-            pass
+    """清理标记：包内的旧标记和包外的旁挂标记都删。
+
+    包内那份还会破坏封条，换回原位前必须清掉，否则会跟着进 Claude.app。
+    """
+    for marker in (_marker_path(path), _legacy_marker(path)):
+        if marker.exists():
+            try:
+                marker.unlink()
+            except OSError:
+                pass
 
 
 def _free_trash_name(app: Path) -> Path:
@@ -237,11 +259,23 @@ def restore_backup(app: Path, backup: Path) -> Path:
 
     与 javaht 一样，原版还原不撤补丁、不重签。区别是先复制到临时目录
     验证再交换，避免 javaht 直接 move 唯一备份留下的失败窗口。
+
+    换回前必须证明这份包是完整的：封条有效 + 官方签名 + 内容干净。
+    任何一项不成立就拒绝——换回一个坏包比不换回更糟。
     """
     from . import integrity, signer
 
+    if not is_complete_backup(backup):
+        raise SystemExit(f"备份不完整，拒绝换回：{backup}")
     if not is_pristine(backup):
         raise SystemExit(f"备份无法确认为官方原版，拒绝直接换回：{backup}")
+    signed, sealed = _cached_signature(backup)
+    if not (signed and sealed):
+        raise SystemExit(
+            f"备份的代码签名封条不完整，无法证明它是干净的官方包：{backup}\n"
+            "请重新安装官方 Claude，或改用「恢复原样」的撤补丁路径。"
+        )
+
     with tempfile.TemporaryDirectory(prefix="claude-restore.") as td:
         prepared = Path(td) / "Claude.app"
         _copy_tree(backup, prepared)

@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "validate":
-        from . import checks, jsonutil, paths, validator
+        from . import checks, discover, jsonutil, paths, validator
 
         inst = discover.detect()
         en = checks.current_frontend_en(inst)

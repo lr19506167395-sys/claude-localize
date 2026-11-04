@@ -74,10 +74,12 @@ class RestoreTests(unittest.TestCase):
             self.assertEqual(fallback, b)
             self.assertTrue(b.exists())
             self.assertFalse((prepared / backup.PRISTINE_MARKER).exists())
+            self.assertFalse(backup._marker_path(prepared).exists())
             self.assertTrue(app.exists())
 
         with mock.patch.object(backup, "swap_in", side_effect=finish), \
                 mock.patch.object(integrity, "verify_app", return_value=[]), \
+                mock.patch.object(signer, "team_identifier", return_value="Q6L2SF6YDW"), \
                 mock.patch.object(signer, "verify", return_value=(True, "")):
             self.assertEqual(restorer.restore(), "restored")
         self.assertTrue(b.exists())
@@ -104,7 +106,7 @@ class RestoreTests(unittest.TestCase):
 
     def test_non_pristine_backup_uses_temporary_strip(self):
         b = self._backup()
-        b.joinpath(backup.PRISTINE_MARKER).unlink()
+        backup._drop_pristine_marker(b)
         with mock.patch.object(backup, "is_pristine", return_value=False), \
                 mock.patch.object(integrity, "probe_layout", return_value=[]), \
                 mock.patch.object(integrity, "verify_app", return_value=[]), \
@@ -121,7 +123,7 @@ class RestoreTests(unittest.TestCase):
 
     def test_strip_failure_aborts_before_swap(self):
         b = self._backup()
-        b.joinpath(backup.PRISTINE_MARKER).unlink()
+        backup._drop_pristine_marker(b)
         with mock.patch.object(backup, "is_pristine", return_value=False), \
                 mock.patch.object(integrity, "probe_layout", return_value=[]), \
                 mock.patch("claude_localize.installer.strip_patch", side_effect=SystemExit("bad")), \
