@@ -114,9 +114,20 @@ class ClaudeLocalizeMenu(rumps.App):
             None,
             rumps.MenuItem("退出", callback=rumps.quit_application),
         ]
-        self._refresh()
+        # 不要在 __init__ 里同步刷新：rumps 要等 __init__ 返回、进入 run()
+        # 之后才创建 NSStatusBar 菜单项。这里同步跑一次状态检查，菜单栏图标
+        # 就会一直不出现（曾经因为一次 asar 扫描卡住 28 秒）。
+        # 先让图标出来，状态丢到后台算，算完再更新标题。
+        threading.Thread(target=self._refresh_async, daemon=True).start()
         if self.settings.get("check_update_on_launch"):
             threading.Thread(target=self._silent_check, daemon=True).start()
+
+    def _refresh_async(self) -> None:
+        """后台算状态，再回主线程更新菜单（状态栏冷启动用）。"""
+        try:
+            self._refresh()
+        except Exception as exc:
+            self._log_exc("_refresh_async", exc)
 
     def _ui(self, fn) -> None:
         """把 UI 修改调度到主线程。

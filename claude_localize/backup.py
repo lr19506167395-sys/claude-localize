@@ -15,6 +15,7 @@ PRISTINE_MARKER = ".claude-localize-pristine"
 
 _SIGNED_CACHE: dict[tuple[str, int], tuple[bool, bool]] = {}
 _VERSION_CACHE: dict[tuple[str, int], str] = {}
+_PRISTINE_CACHE: dict[tuple[str, int], bool] = {}
 
 
 def _rmtree(path: Path) -> None:
@@ -58,17 +59,44 @@ def is_complete_backup(path: Path) -> bool:
 def is_pristine(path: Path) -> bool:
     """这份备份是不是官方原版（打补丁之前的状态）。
 
-    判据：带原版标记文件，**或**「签名封条完好且仍是官方 Developer ID」。
+    判据：带原版标记文件，**或**「签名封条完好且仍是官方 Developer ID」，
+    两者都还要通过内容检查（没有我们写进去的中文资源）。
 
     「带 TeamIdentifier」单独不够：封条被破坏时 ``codesign -dv`` 照样
     输出 ``TeamIdentifier=Q6L2SF6YDW``（实测：往 Resources 里加一个文件，
     ``--verify`` 报 "a sealed resource is missing or invalid"，``-dv`` 仍报官方
     Team ID）。汉化写到一半中断——语言文件已写入、还没走到 resign——
-    留下的包正好是这个形态。只判 TeamIdentifier 会把它当成「官方原版」，
-    用户点「恢复原样」拿回来的仍是中文包，状态栏还显示「原版」。
+    留下的包正好是这个形态。
 
-    所以这里必须两个条件同时成立：封条有效 + 官方 Team ID。
+    结果按「路径 + 关键文件 mtime」缓存：状态栏每次刷新都会问，而一次
+    完整检查要跑两次 codesign 加一遍 asar 扫描，不缓存会让菜单卡住。
     """
+    path = Path(path)
+    key = (str(path), _pristine_stamp(path))
+    hit = _PRISTINE_CACHE.get(key)
+    if hit is None:
+        hit = _PRISTINE_CACHE[key] = _pristine_uncached(path)
+    return hit
+
+
+def _pristine_stamp(path: Path) -> int:
+    """用于缓存失效的指纹：标记文件与几个关键资源的 mtime。"""
+    stamp = 0
+    for rel in (
+        PRISTINE_MARKER,
+        "Contents/Info.plist",
+        "Contents/_CodeSignature/CodeResources",
+        "Contents/Resources/app.asar",
+        "Contents/Resources/ion-dist.asar",
+    ):
+        try:
+            stamp ^= (path / rel).stat().st_mtime_ns
+        except OSError:
+            continue
+    return stamp
+
+
+def _pristine_uncached(path: Path) -> bool:
     if (path / PRISTINE_MARKER).is_file():
         try:
             return _has_no_patch_content(path)

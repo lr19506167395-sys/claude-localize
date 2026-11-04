@@ -118,24 +118,43 @@ def has_marker(text: str) -> bool:
 
 
 def has_marker_in_asar(asar_path: Path) -> bool:
-    """asar 里有没有我们的斜杠菜单补丁（决定「恢复原样」要不要重打包）。"""
+    """asar 里有没有我们的斜杠菜单补丁（决定「恢复原样」要不要重打包）。
+
+    **只解析一次 header**，然后按 offset 逐条 seek 读取。
+
+    早期实现用的是 asar.read_entry_file()，它每次都会重新解析整个 header
+    （ion-dist.asar 的 header 有 1.28MB）。4000 多个 .js 条目 = O(n²)，
+    实测 12–16 秒。这个函数在状态栏刷新里被调用，直接导致菜单栏图标
+    几十秒不出现，所以必须保持线性。
+    """
     from . import asar
 
     if not asar_path.is_file():
         return False
     try:
-        _hs, _s, header = asar.read_header_file(asar_path)
+        header_size, _s, header = asar.read_header_file(asar_path)
     except Exception:
         return False
-    for rel, _entry in asar.walk(header):
-        if not rel.endswith(".js"):
-            continue
-        try:
-            body = asar.read_entry_file(asar_path, rel) or b""
-        except Exception:
-            continue
-        if MARKER.encode() in body:
-            return True
+
+    marker = MARKER.encode()
+    unpacked_root = Path(str(asar_path) + ".unpacked")
+    try:
+        with asar_path.open("rb") as f:
+            for rel, entry in asar.walk(header):
+                if not rel.endswith(".js"):
+                    continue
+                if entry.get("unpacked"):
+                    try:
+                        body = (unpacked_root / Path(*rel.split("/"))).read_bytes()
+                    except OSError:
+                        continue
+                else:
+                    f.seek(asar.file_offset(header_size, entry))
+                    body = f.read(int(entry["size"]))
+                if marker in body:
+                    return True
+    except OSError:
+        return False
     return False
 
 
