@@ -2,10 +2,18 @@
 
 ## 1.0.6
 
-修复「拉取上游」把词表写进 app 包内部的问题。
+修复「拉取上游」把词表写进 app 包内部，以及打包产物签名一直是破的。
 
 ### 修复
 
+- **打包产物签名一直是破的**：`setup.py` 的 postbuild 在 py2app 完成后
+  往包内拷 rumps/objc 等模块、还改了 `__boot__.py`，但 py2app 的签名是
+  在那之前做的，之后没有任何重新签名。于是每个构建出来的 app 都处于
+  「签名已破」状态：`codesign --verify --deep --strict` 报
+  "a sealed resource is missing or invalid" 和
+  "file added: .../site-packages/rumps/rumps.py"。现在 postbuild 末尾
+  补一次 ad-hoc 重签名（带 `disable-library-validation`），签完立刻
+  verify，失败就中止构建，不让坏包进 `/Applications`。
 - **拉取词表写坏了自己的签名**：`upstream.pull()` 原来写到
   `PROJECT_ROOT/packs/`，打包运行时那就是
   `/Applications/Claude汉化.app/Contents/Resources/packs/` ——
@@ -27,8 +35,9 @@
 
 ### 验证
 
-- 150 个单元测试通过
+- 153 个单元测试通过
 - 实测拉取后：用户目录 1.4.22、源码目录仍 1.4.21、app 包内未被写入
+- 重新打包后 `codesign --verify --deep --strict` 通过（rc=0）
 
 ## 1.0.5
 
