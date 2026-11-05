@@ -4,6 +4,8 @@ from pathlib import Path
 from setuptools import setup, Command
 
 APP = ["menubar_app.py"]
+# *.json 已包含 release.json（词表版本号）；它曾经是点开头的
+# .upstream-version，glob 与 py2app 都不会收，包里永远读不到版本。
 PACK_FILES = [str(p) for p in sorted(Path("packs/zh-CN").glob("*.json"))]
 PACK_FILES += [str(p) for p in sorted(Path("packs/zh-CN").glob("*.strings"))]
 # 自有译文（agent 补翻成果）也要随包分发，否则安装时用不上
@@ -16,7 +18,7 @@ OPTIONS = {
         "CFBundleName": "Claude汉化",
         "CFBundleDisplayName": "Claude汉化",
         "CFBundleIdentifier": "com.claude-localize.app",
-        "CFBundleShortVersionString": "1.0.3",
+        "CFBundleShortVersionString": "1.0.4",
         "CFBundleVersion": "1",
         "CFBundleIconFile": "AppIcon.icns",
         "CFBundleDevelopmentRegion": "zh_CN",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import (
     asar, backup, cleanup, discover, jsonutil, merger, native_strings, paths,
-    shell, signer,
+    shell, signer, upstream,
 )
 
 
@@ -86,9 +86,9 @@ def status(verbose: bool = True) -> dict:
     patched = discover.is_patched(inst)
     b = backup.best_backup(inst.app)
     version = None
-    vf = _pack_dir() / ".upstream-version"
-    if vf.exists():
-        version = vf.read_text(encoding="utf-8").strip().strip('"')
+    # 走 upstream.local_version()，别在这里另写一份读文件逻辑：
+    # 版本文件名换过一次（dotfile 打包会丢），两处分叉必然再次踩坑。
+    version = upstream.local_version()
 
     frontend_gap = desktop_gap = None
     try:

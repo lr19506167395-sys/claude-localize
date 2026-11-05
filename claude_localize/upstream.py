@@ -41,6 +41,11 @@ PACK_FILES = {
 BINARY_FILES = {"Localizable.strings": "resources/Localizable.strings"}
 VERSION_FILE = "resources/release.json"
 
+# 本地记录的版本文件。不能再用点开头的文件名：pipx 与 py2app 打包时
+# 都会跳过 dotfile，装出来的包会一直显示「词表版本: 未记录」。
+VERSION_LOCAL_FILE = "release.json"
+LEGACY_VERSION_FILE = ".upstream-version"
+
 # 合理性阈值：防止上游结构大改时把坏数据写进来
 MIN_COUNTS = {
     "frontend.json": 20000,
@@ -62,8 +67,31 @@ def _pack_dir() -> Path:
 
 
 def local_version() -> str | None:
-    p = _pack_dir() / ".upstream-version"
-    return p.read_text(encoding="utf-8").strip() if p.exists() else None
+    """本地词表版本。
+
+    存成 ``release.json``（与上游同名同结构）而不是 dotfile：
+    ``.upstream-version`` 这种点开头文件会被 pipx/py2app 打包时默认跳过，
+    装出来的包永远显示「词表版本: 未记录」。旧的 dotfile 仍兼容读取。
+    """
+    p = _pack_dir() / VERSION_LOCAL_FILE
+    if p.exists():
+        try:
+            raw = p.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            return str(data["release"]).strip() if data.get("release") else None
+        # 纯文本形态也认（早期手写的情况）；但坏掉的 JSON 不能再当文本返回，
+        # 否则状态栏会显示 `{bad` 这种垃圾值
+        if raw.lstrip().startswith(("{", "[")):
+            return None
+        return raw.strip().strip('"') or None
+    legacy = _pack_dir() / LEGACY_VERSION_FILE
+    return legacy.read_text(encoding="utf-8").strip() if legacy.exists() else None
 
 
 def check_remote(ref: str = "main") -> dict[str, Any]:
@@ -192,16 +220,21 @@ def _write(
         (out_dir / name).write_bytes(raw)
         counts[name] = raw.decode("utf-16-le", "ignore").count("=")
 
-    # 记录版本号（纯文本，不带引号）
+    # 记录版本号
     if ref:
         try:
             remote = json.loads(_fetch(
                 JSDELIVR.format(repo=REPO, ref=ref) + VERSION_FILE, timeout=20
             ))
-            (out_dir / ".upstream-version").write_text(
-                str(remote.get("release", "")), encoding="utf-8"
-            )
+            jsonutil.save_json(out_dir / VERSION_LOCAL_FILE, remote)
         except Exception:
+            pass
+    # 清理旧版 dotfile，避免两处版本号互相矛盾
+    legacy = out_dir / LEGACY_VERSION_FILE
+    if legacy.exists():
+        try:
+            legacy.unlink()
+        except OSError:
             pass
     return counts
 
