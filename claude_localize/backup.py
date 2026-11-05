@@ -483,11 +483,15 @@ def prune_old_backups(app: Path, keep: int = 1) -> list[Path]:
     def drop(path: Path) -> bool:
         try:
             shutil.rmtree(path)
-            removed.append(path)
-            return True
         except (PermissionError, OSError) as exc:
             print(f"警告：备份未删干净 {path}（{exc}）")
             return False
+        # 旁挂标记是**另一个文件**，rmtree 只删掉了 .app 本身。
+        # 不一起清掉就会在 /Applications 里留下孤立的
+        # Claude.backup-*.app.claude-localize-pristine。
+        _drop_pristine_marker(path)
+        removed.append(path)
+        return True
 
     # app 不在、或 plist 读不出版本时不能按版本删：那会把所有备份判成
     # 版本不符全部删光，真出问题时就没有可恢复的 Claude 了。

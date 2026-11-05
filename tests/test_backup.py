@@ -119,6 +119,12 @@ class PruneTests(unittest.TestCase):
             backup.prune_old_backups(app, keep=1)
             self.assertFalse(stale.exists(), "旧版本原版备份不该永久保留")
             self.assertTrue(current.exists())
+            # 旁挂标记是另一个文件，rmtree 删不到，必须显式清掉，
+            # 否则 /Applications 里会留下孤立的 *.app.claude-localize-pristine
+            self.assertFalse(
+                backup._marker_path(stale).exists(),
+                "删备份时没清理旁挂标记，会留下孤儿文件",
+            )
 
     def test_does_not_wipe_everything_when_app_is_missing(self):
         """安装中途 app 被改名时，版本号会读成 "0"，绝不能因此把所有备份删光。"""
