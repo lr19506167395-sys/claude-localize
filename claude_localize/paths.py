@@ -38,6 +38,34 @@ PROJECT_ROOT = _project_root()
 
 # 用户可写目录：配置、自有译文、缓存。重装/升级不会丢。
 USER_DIR = Path(os.environ.get("CLAUDE_LOCALIZE_HOME", Path.home() / ".claude-localize"))
+
+# 用户目录里的词表。拉取上游时写这里，绝不该写进 app 包内部：
+# 包内的 packs/ 在代码签名封条范围内，写一个字就会让
+# ``codesign --verify`` 报 "a sealed resource is missing or invalid"；
+# 而且下次 ./build.sh 会用源码仓库里的旧词表把它盖掉。
+USER_PACKS = USER_DIR / "packs"
+
+
+def pack_dir() -> Path:
+    """当前生效的词表目录：用户目录里有就用它，否则用随包的只读副本。
+
+    用户目录优先，这样「拉取上游」的结果能一直生效，不受重装影响。
+    """
+    user = USER_PACKS / TARGET_LOCALE
+    if (user / "frontend.json").is_file():
+        return user
+    return PROJECT_ROOT / "packs" / TARGET_LOCALE
+
+
+def pack_write_dir() -> Path:
+    """**写入**词表要用这个，永远是用户目录。
+
+    写入侧不能走 ``pack_dir()``：源码运行时它会指回仓库，把开发者的
+    工作区悄悄改掉；打包运行时它指向 app 包内部，会破坏签名。
+    """
+    return USER_PACKS / TARGET_LOCALE
+
+
 CONFIG_FILE = USER_DIR / "config.json"
 
 BACKUPS_DIR = USER_DIR / "backups"

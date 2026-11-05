@@ -36,7 +36,7 @@ def _force_writable(path: Path) -> None:
 
 
 def pack_file() -> Path:
-    return paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE / "Localizable.strings"
+    return paths.pack_dir() / "Localizable.strings"
 
 
 def _resources(app: Path) -> Path:

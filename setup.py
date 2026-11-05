@@ -18,7 +18,7 @@ OPTIONS = {
         "CFBundleName": "Claude汉化",
         "CFBundleDisplayName": "Claude汉化",
         "CFBundleIdentifier": "com.claude-localize.app",
-        "CFBundleShortVersionString": "1.0.5",
+        "CFBundleShortVersionString": "1.0.6",
         "CFBundleVersion": "1",
         "CFBundleIconFile": "AppIcon.icns",
         "CFBundleDevelopmentRegion": "zh_CN",

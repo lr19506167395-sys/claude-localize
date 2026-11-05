@@ -55,7 +55,7 @@ class InstallReport:
 
 
 def _pack_root() -> Path:
-    return paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE
+    return paths.pack_dir()
 
 
 def _load_pack(name: str) -> dict[str, str]:

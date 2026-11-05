@@ -141,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "inspect":
         from . import checks, jsonutil, merger, paths
 
-        pack_dir = paths.PROJECT_ROOT / "packs" / "zh-CN"
+        pack_dir = paths.pack_dir()
         from . import discover
 
         inst = discover.detect()
@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
 
         inst = discover.detect()
         en = checks.current_frontend_en(inst)
-        pack = jsonutil.load_dict(paths.PROJECT_ROOT / "packs/zh-CN/frontend.json")
+        pack = jsonutil.load_dict(paths.pack_dir() / "frontend.json")
         errs = validator.validate_dict(en, pack, "frontend")
         print(f"校验问题：{len(errs)} / {len(pack)}")
         for e in errs[:20]:

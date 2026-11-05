@@ -459,8 +459,8 @@ class ClaudeLocalizeMenu(rumps.App):
 
         h = hashlib.sha256()
         for path in (
-            paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE / "frontend.json",
-            paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE / "desktop.json",
+            paths.pack_dir() / "frontend.json",
+            paths.pack_dir() / "desktop.json",
             paths.custom_path(),
         ):
             try:

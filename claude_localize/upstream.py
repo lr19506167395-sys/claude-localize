@@ -63,7 +63,8 @@ def _fetch(url: str, timeout: int = 60) -> bytes:
 
 
 def _pack_dir() -> Path:
-    return paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE
+    """当前生效的词表目录（读）。用户目录优先，其次随包副本。"""
+    return paths.pack_dir()
 
 
 def local_version() -> str | None:
@@ -201,16 +202,27 @@ def pull_from_local(source: Path, verbose: bool = True) -> dict[str, int]:
 def _write(
     downloaded: dict[str, Any], binaries: dict[str, bytes], log, ref: str | None = None
 ) -> dict[str, int]:
-    out_dir = _pack_dir()
+    # 写入永远落用户目录：写进 app 包内部会破坏代码签名，
+    # 写进源码仓库会在下次 build 时被覆盖。
+    out_dir = paths.pack_write_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 备份旧词表
+    # 备份旧词表（读的是当前生效那份，可能是随包副本）
     backup_dir = paths.USER_DIR / "sources-backup"
-    if out_dir.exists() and any(out_dir.glob("*.json")):
+    old_dir = _pack_dir()
+    if old_dir.is_dir() and any(old_dir.glob("*.json")):
         backup_dir.mkdir(parents=True, exist_ok=True)
-        for f in out_dir.glob("*.json"):
+        for f in old_dir.glob("*.json"):
             shutil.copy2(f, backup_dir / f.name)
         log(f"  旧词表已备份到 {backup_dir}")
+
+    # 从随包副本首次拉取时，把其余文件也复制过来，
+    # 否则用户目录里只有被拉取的几个 json，Localizable.strings 之类会缺。
+    if old_dir != out_dir and old_dir.is_dir():
+        for f in old_dir.iterdir():
+            target = out_dir / f.name
+            if f.is_file() and not target.exists():
+                shutil.copy2(f, target)
 
     counts: dict[str, int] = {}
     for name, data in downloaded.items():

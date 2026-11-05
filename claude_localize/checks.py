@@ -11,7 +11,7 @@ from . import (
 
 
 def _pack_dir() -> Path:
-    return paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE
+    return paths.pack_dir()
 
 
 def _read_json(path: Path) -> dict:

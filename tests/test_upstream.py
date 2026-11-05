@@ -72,6 +72,35 @@ class PackagingTests(unittest.TestCase):
         """
         self.assertFalse(upstream.VERSION_LOCAL_FILE.startswith("."))
 
+    def test_pull_writes_outside_the_app_bundle(self):
+        """拉取必须写用户目录，不能写进 app 包内部。
+
+        包内的 packs/ 在代码签名封条范围内，写一个字就让
+        ``codesign --verify`` 报 "a sealed resource is missing or invalid"；
+        源码运行时写到仓库里，下次 build 还会被旧词表盖掉。
+        """
+        write_dir = paths.pack_write_dir()
+        self.assertEqual(write_dir.parent.parent, paths.USER_DIR)
+        self.assertNotIn("Contents/Resources", str(write_dir))
+
+    def test_pack_dir_falls_back_to_bundle_copy(self):
+        """用户目录没有词表时，读的应该是随包那份。"""
+        with mock.patch.object(paths, "USER_PACKS", Path("/nonexistent/packs")):
+            self.assertEqual(
+                paths.pack_dir(),
+                paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE,
+            )
+
+    def test_pack_dir_prefers_user_copy(self):
+        """用户目录有词表时以它为准，这样拉取结果能一直生效。"""
+        with tempfile.TemporaryDirectory() as td:
+            user = Path(td)
+            pack = user / paths.TARGET_LOCALE
+            pack.mkdir(parents=True)
+            (pack / "frontend.json").write_text("{}", encoding="utf-8")
+            with mock.patch.object(paths, "USER_PACKS", user):
+                self.assertEqual(paths.pack_dir(), pack)
+
     def test_repo_ships_release_json(self):
         pack = paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE / "release.json"
         self.assertTrue(pack.is_file(), f"缺少 {pack}")

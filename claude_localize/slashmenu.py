@@ -20,7 +20,7 @@ MARKER = "/*__claudeZhSlashGloss_v1__*/"
 
 
 def _pack_dir() -> Path:
-    return paths.PROJECT_ROOT / "packs" / paths.TARGET_LOCALE
+    return paths.pack_dir()
 
 
 def load_profile() -> dict:
