@@ -77,6 +77,43 @@ class postbuild(Command):
             )
             boot.write_text(text[:pos] + patch + text[pos:], encoding="utf-8")
 
+        # 必须重新签名：上面往包内拷了 rumps/objc 等模块、还改了
+        # __boot__.py，而 py2app 的签名是**在那之前**做的。
+        # 不补这一步，"codesign --verify --deep --strict" 会报
+        # "file added: .../site-packages/rumps/rumps.py"。
+        self._resign(app)
+
+    @staticmethod
+    def _resign(app: Path) -> None:
+        """对打包产物做 ad-hoc 重签名（带 entitlements）。"""
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="claude-zh-app-ent.") as td:
+            ent = Path(td) / "ent.plist"
+            ent.write_text(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                '<plist version="1.0"><dict>'
+                "<key>com.apple.security.cs.disable-library-validation</key><true/>"
+                "</dict></plist>\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["codesign", "--force", "--deep", "--sign", "-",
+                 "--entitlements", str(ent), str(app)],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise SystemExit(f"重签名失败：{result.stderr.strip()}")
+            check = subprocess.run(
+                ["codesign", "--verify", "--deep", "--strict", str(app)],
+                capture_output=True, text=True,
+            )
+            if check.returncode != 0:
+                raise SystemExit(f"重签名后校验仍未通过：{check.stderr.strip()}")
+
 
 setup(
     name="Claude汉化",
