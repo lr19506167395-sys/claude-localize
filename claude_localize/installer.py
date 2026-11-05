@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import (
     asar, asar_edit, backup, cleanup, discover, dompatch, frontend_bundle,
-    integrity, jsonutil, native_strings, paths, shell, signer, slashmenu,
+    integrity, jsonutil, native_strings, paths, procutil, shell, signer, slashmenu,
 )
 from . import frontend_locale as locale
 from . import merger, validator
@@ -619,11 +618,9 @@ def _ditto(src: Path, dst: Path) -> None:
     """用 ditto 复制 app：保留扩展属性、ACL、资源分支（cp/copytree 会丢）。"""
     if dst.exists():
         shutil.rmtree(dst)
-    result = subprocess.run(
-        ["ditto", str(src), str(dst)], capture_output=True, text=True
-    )
+    result = procutil.run(["ditto", str(src), str(dst)])
     if result.returncode != 0:
-        raise SystemExit(f"复制 app 失败：{result.stderr.strip()}")
+        raise SystemExit(f"复制 app 失败：{procutil.decode(result.stderr).strip()}")
 
 
 def _copy_light(src: Path, dst: Path) -> None:

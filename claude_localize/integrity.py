@@ -17,6 +17,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from . import procutil
+
 
 def compute_integrity(content: bytes, block_size: int = 4194304) -> dict[str, Any]:
     """按 Electron 的规则计算完整性信息。"""
@@ -86,22 +88,22 @@ def _plist_key(rel: str) -> str:
 def read_plist_hash(plist: Path, rel: str = "Resources/app.asar") -> str | None:
     import subprocess
 
-    result = subprocess.run(
-        ["/usr/libexec/PlistBuddy", "-c", f"Print :{_plist_key(rel)}", str(plist)],
-        capture_output=True, text=True,
+    result = procutil.run(
+        ["/usr/libexec/PlistBuddy", "-c", f"Print :{_plist_key(rel)}", str(plist)]
     )
-    return result.stdout.strip() if result.returncode == 0 else None
+    return procutil.decode(result.stdout).strip() if result.returncode == 0 else None
 
 
 def write_plist_hash(plist: Path, value: str, rel: str = "Resources/app.asar") -> None:
     import subprocess
 
-    result = subprocess.run(
-        ["/usr/libexec/PlistBuddy", "-c", f"Set :{_plist_key(rel)} {value}", str(plist)],
-        capture_output=True, text=True,
+    result = procutil.run(
+        ["/usr/libexec/PlistBuddy", "-c", f"Set :{_plist_key(rel)} {value}", str(plist)]
     )
     if result.returncode != 0:
-        raise SystemExit(f"更新 Info.plist 的 asar 哈希失败：{result.stderr.strip()}")
+        raise SystemExit(
+            f"更新 Info.plist 的 asar 哈希失败：{procutil.decode(result.stderr).strip()}"
+        )
 
 
 def header_hash(header_string: str) -> str:

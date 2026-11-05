@@ -48,15 +48,23 @@ class ClaudeInstall:
         永远失败；``pgrep -f`` 对这条命令行同样匹配不到。后果很严重——
         ``is_running()`` 恒为 False，安装会跳过「退出 Claude」，
         磁盘上的 asar 被换掉但运行中的进程继续用内存里的旧版本。
+
+        **不要用 ``text=True``**：它按 ``locale.getpreferredencoding()`` 解码，
+        而 py2app 打包后从 Finder 启动的进程里这个值是 ASCII，``ps`` 输出
+        只要含一个非 ASCII 路径（比如 ``/Applications/Claude汉化.app/...``）
+        就抛 ``UnicodeDecodeError``，安装直接失败（实测 offset 45763）。
+        这里自己按 UTF-8 解码，坏字节用 replace 兜底：进程名解错只会让
+        某一行匹配不上，不该让整个安装崩掉。
         """
         try:
             r = subprocess.run(
-                ["ps", "-ax", "-o", "pid=,comm="], capture_output=True, text=True, timeout=10
+                ["ps", "-ax", "-o", "pid=,comm="], capture_output=True, timeout=10
             )
         except (OSError, subprocess.SubprocessError):
             return []
+        out = r.stdout.decode("utf-8", "replace")
         pids = []
-        for line in r.stdout.splitlines():
+        for line in out.splitlines():
             parts = line.strip().split(None, 1)
             if len(parts) != 2:
                 continue
@@ -191,7 +199,7 @@ def detect(app: Path | None = None) -> ClaudeInstall:
     plist = app / "Contents" / "Info.plist"
     version = subprocess.check_output(
         ["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", str(plist)]
-    ).decode().strip()
+    ).decode("utf-8", "replace").strip()
 
     cfg_path = active_config_path()
     locale = "en-US"

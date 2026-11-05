@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-localize"
-version = "1.0.4"
+version = "1.0.5"
 description = "Claude Desktop 中文界面补丁（macOS）"
 readme = "README.md"
 requires-python = ">=3.10"

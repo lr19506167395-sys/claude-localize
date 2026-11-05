@@ -367,11 +367,50 @@ class ClaudeLocalizeMenu(rumps.App):
             threading.Thread(target=spin, daemon=True).start()
 
         class Writer:
+            """把 stdout/stderr 重定向进日志文件。
+
+            必须实现完整的文本流协议（encoding / errors / isatty / writable
+            等），不能只有 write。py2app 的 sys.stdout 原本是
+            io.TextIOWrapper；把它换成缺属性的对象后，任何读
+            ``sys.stdout.encoding`` 的代码（subprocess 决定解码方式、
+            textwrap、traceback 格式化）都会退回到 ASCII，
+            于是中文输出直接抛
+            ``'ascii' codec can't decode byte ...``。
+            """
+            encoding = "utf-8"
+            errors = "replace"
+            newlines = None
+            closed = False
+
             def write(self, text):
-                with log.open("a", encoding="utf-8") as f:
-                    f.write(str(text))
+                try:
+                    with log.open("a", encoding="utf-8") as f:
+                        f.write(str(text))
+                except OSError:
+                    pass
+                return len(str(text))
+
+            def writelines(self, lines):
+                for line in lines:
+                    self.write(line)
+
             def flush(self):
                 pass
+
+            def isatty(self):
+                return False
+
+            def readable(self):
+                return False
+
+            def writable(self):
+                return True
+
+            def seekable(self):
+                return False
+
+            def fileno(self):
+                raise OSError("Writer 没有底层文件描述符")
 
         def run():
             old_out, old_err = sys.stdout, sys.stderr
@@ -385,8 +424,12 @@ class ClaudeLocalizeMenu(rumps.App):
                 self._set_last(f"✓ {label} · {msg[:48]}")
                 self._notify(title, msg)
             except BaseException as exc:
+                # 必须记完整 traceback：只有 str(exc) 时，编码类错误会丢掉
+                # 全部上下文（哪个文件、哪一行、哪个调用），根本无从定位。
+                import traceback as _tb
                 with log.open("a", encoding="utf-8") as f:
-                    f.write(f"\n错误：{exc}\n")
+                    f.write(f"\n错误：{exc}\n\n")
+                    f.write("".join(_tb.format_exception(exc)))
                 brief = str(exc).strip().replace("\n", " ")[:60]
                 self._set_last(f"✗ {label}：{brief}")
                 try:

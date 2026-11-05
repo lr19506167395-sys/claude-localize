@@ -7,6 +7,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import procutil
+
 
 BACKUP_GLOB = "Claude.backup-before-zh-*.app"
 # 标记写在与 .app **同级**的旁挂文件里，不能写进包内：
@@ -39,12 +41,10 @@ def _rmtree(path: Path) -> None:
         return
     except (PermissionError, OSError):
         pass
-    result = subprocess.run(
-        ["sudo", "-n", "rm", "-rf", str(path)], capture_output=True, text=True
-    )
+    result = procutil.run(["sudo", "-n", "rm", "-rf", str(path)])
     if result.returncode != 0:
         raise SystemExit(
-            f"无法删除 {path}（{result.stderr.strip()}）。\n"
+            f"无法删除 {path}（{procutil.decode(result.stderr).strip()}）。\n"
             "请手动执行：sudo rm -rf " + str(path)
         )
 
@@ -205,11 +205,9 @@ def _copy_tree(src: Path, dst: Path) -> None:
     """
     if dst.exists():
         raise OSError(f"目标已存在：{dst}")
-    result = subprocess.run(
-        ["ditto", str(src), str(dst)], capture_output=True, text=True
-    )
+    result = procutil.run(["ditto", str(src), str(dst)])
     if result.returncode != 0:
-        raise OSError(f"ditto 失败：{result.stderr.strip()}")
+        raise OSError(f"ditto 失败：{procutil.decode(result.stderr).strip()}")
 
 
 def swap_in(app: Path, source: Path, fallback: Path) -> None:
@@ -389,12 +387,9 @@ def bundle_version(app: Path) -> str:
     hit = _VERSION_CACHE.get(key)
     if hit is not None:
         return hit
-    result = subprocess.run(
-        ["/usr/libexec/PlistBuddy", "-c",
-         "Print :CFBundleShortVersionString", str(plist)],
-        capture_output=True, text=True,
-    )
-    raw = result.stdout.strip() if result.returncode == 0 else ""
+    result = procutil.run(["/usr/libexec/PlistBuddy", "-c",
+                           "Print :CFBundleShortVersionString", str(plist)])
+    raw = procutil.decode(result.stdout).strip() if result.returncode == 0 else ""
     # 只接受 3.4.29 这种形态；PlistBuddy 的报错文本一律当读不出来
     version = raw if raw and all(
         ch.isdigit() or ch == "." for ch in raw

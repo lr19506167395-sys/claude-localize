@@ -22,13 +22,24 @@ PS_OUTPUT = """\
   12345 /usr/bin/some-other
 """
 
+# 真实现场：汉化 app 自己在跑时，ps 的 comm 列里带中文路径。
+# GUI 进程的 locale 是 ASCII，旧实现用 text=True 解码，直接抛
+# UnicodeDecodeError，菜单栏「安装补丁」在第一步 is_running() 就崩了。
+PS_OUTPUT_WITH_CJK = """\
+  50837 /Applications/Claude汉化.app/Contents/MacOS/Claude汉化
+  67333 /Applications/Claude.app/Contents/MacOS/Claude
+  12345 /usr/bin/some-other
+"""
+
 
 class ProcessDetectionTests(unittest.TestCase):
     def setUp(self):
         self.inst = discover.ClaudeInstall(Path("/Applications/Claude.app"), "4.4212.0", "en-US")
 
     def _run_with(self, stdout: str):
-        return mock.Mock(returncode=0, stdout=stdout, stderr="")
+        # main_pids 现在拿 bytes 自己按 UTF-8 解码（text=True 在 GUI 的
+        # ASCII locale 下会崩），mock 也要按真实形态给 bytes。
+        return mock.Mock(returncode=0, stdout=stdout.encode("utf-8"), stderr=b"")
 
     def test_finds_main_process_only(self):
         """Helper 子进程不能被当成主进程。"""
@@ -47,6 +58,30 @@ class ProcessDetectionTests(unittest.TestCase):
     def test_ps_failure_counts_as_not_running(self):
         with mock.patch.object(discover.subprocess, "run", side_effect=OSError("no ps")):
             self.assertFalse(self.inst.is_running())
+
+    def test_non_ascii_process_path_does_not_crash(self):
+        """回归：ps 输出里带中文路径时（汉化 app 自己在跑），必须正常解析。
+
+        旧实现用 text=True，按 locale 解码；py2app 从 Finder 启动的进程
+        locale 是 ASCII，于是抛
+        ``'ascii' codec can't decode byte 0xe6 ... in position 45763``，
+        菜单栏「安装补丁」在 is_running() 第一步就失败。
+        """
+        with mock.patch.object(
+            discover.subprocess, "run", return_value=self._run_with(PS_OUTPUT_WITH_CJK)
+        ):
+            self.assertEqual(self.inst.main_pids(), [67333])
+            self.assertTrue(self.inst.is_running())
+
+    def test_undecodable_bytes_are_replaced_not_raised(self):
+        """真出现坏字节时也不能抛——进程名解错一行，好过整个安装崩掉。"""
+        broken = mock.Mock(
+            returncode=0,
+            stdout=b"  1 /Applications/Claude.app/Contents/MacOS/Claude\n  2 /\xff\xfe\n",
+            stderr=b"",
+        )
+        with mock.patch.object(discover.subprocess, "run", return_value=broken):
+            self.assertEqual(self.inst.main_pids(), [1])
 
     def test_matches_custom_app_path(self):
         """同一个 .app 换了个安装路径，仍要能认出来。"""

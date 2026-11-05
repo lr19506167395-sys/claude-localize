@@ -1,5 +1,37 @@
 # 更新日志
 
+## 1.0.5
+
+修复菜单栏「安装补丁」必定失败的问题。
+
+### 修复
+
+- **子进程输出按 ASCII 解码直接崩溃**：`discover.main_pids()` 用
+  `subprocess.run(..., text=True)` 读 `ps` 输出，而 `text=True` 按
+  `locale.getpreferredencoding()` 解码。py2app 打包后从 Finder 启动的
+  进程里这个值是 ASCII，`ps` 的 `comm` 列只要含一个非 ASCII 路径
+  -- 也就是 `/Applications/Claude汉化.app/Contents/MacOS/Claude汉化`
+  自己 -- 就抛
+  `'ascii' codec can't decode byte 0xe6 ... in position 45763`。
+  因为它在 `is_running()` 里，失败发生在安装的第一步，用户只看到一句
+  没头没尾的错误。现在新增 `procutil` 统一处理：拿 bytes，自己按
+  UTF-8 解，坏字节 `replace` 兜底。
+- **同一隐患的其他位置**：`signer._run()`（codesign）、
+  `backup`/`installer` 的 `ditto`、`cleanup`/`backup` 的 `sudo rm`、
+  `integrity` 的 `PlistBuddy` 全部改成走 `procutil`。这些命令的
+  stderr 同样会带中文路径。
+- **错误日志只有一行 `str(exc)`**：编码类异常的关键上下文（哪个文件、
+  哪一行、哪个调用）全部丢失，无从定位。现在记录完整 traceback。
+- **`_background` 的 stdout 重定向器缺流协议**：只有 `write`/`flush`，
+  没有 `encoding`/`errors`/`isatty`/`writable` 等属性，任何读
+  `sys.stdout.encoding` 的代码都会退化到 ASCII。
+
+### 验证
+
+- 150 个单元测试通过（新增中文路径、坏字节两条回归）
+- 复现验证：同一份 `ps` 输出，旧写法抛
+  `'ascii' codec can't decode byte 0xe6 in position 45367`，新写法正常
+
 ## 1.0.4
 
 - **装好的包永远显示「词表版本: 未记录」**：版本号原先存在

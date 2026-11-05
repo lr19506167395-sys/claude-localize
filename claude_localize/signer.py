@@ -19,6 +19,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from . import procutil
+
 # ad-hoc 签名没有真实 Team ID，必须显式关闭库校验，
 # 否则 Electron 主进程加载自带 framework 时会失败
 FORCE_ENTITLEMENTS = {
@@ -33,8 +35,23 @@ DROP_KEYS = {
 }
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True)
+class _Result:
+    """把 bytes 输出按 UTF-8 解码后的结果，接口与 CompletedProcess 一致。
+
+    不能直接给 ``subprocess.run(..., text=True)``：它按 locale 解码，
+    py2app 从 Finder 启动时 locale 是 ASCII，``codesign`` 只要在错误信息里
+    提到一个中文路径（``/Applications/Claude汉化.app/...``）就会抛
+    UnicodeDecodeError，把整个安装打断。
+    """
+
+    def __init__(self, proc: subprocess.CompletedProcess) -> None:
+        self.returncode = proc.returncode
+        self.stdout = procutil.decode(proc.stdout)
+        self.stderr = procutil.decode(proc.stderr)
+
+
+def _run(cmd: list[str]) -> _Result:
+    return _Result(procutil.run(cmd))
 
 
 def load_entitlements(path: Path) -> dict | None:

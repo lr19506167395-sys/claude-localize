@@ -18,7 +18,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup
+from . import backup, procutil
 
 # 4.29+ 只从 app.asar 内读 i18n，散装文件不再被加载
 DEAD_LOOSE_LOCALES = ("zh-CN.json", "zh-Hans.json", "zh-TW.json", "zh-HK.json")
@@ -89,9 +89,7 @@ def _remove(path: Path) -> bool:
         return True
     except (PermissionError, OSError):
         pass
-    result = subprocess.run(
-        ["sudo", "-n", "rm", "-rf", str(path)], capture_output=True, text=True
-    )
+    result = procutil.run(["sudo", "-n", "rm", "-rf", str(path)])
     return result.returncode == 0 and not path.exists()
 
 
