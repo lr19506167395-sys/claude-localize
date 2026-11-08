@@ -134,10 +134,11 @@ claude-localize restore --clean   # 清理包内残留后再还原（在临时�
 ```bash
 claude-localize check-update          # 只查上游版本
 claude-localize pull-upstream         # jsDelivr → GitHub zip → 本地目录
-claude-localize pull-upstream --local ~/Downloads/claude-desktop-zh-cn-1.4.19
+claude-localize pull-upstream --local ~/Downloads/claude-desktop-zh-cn   # 离线：指定上游仓库目录
 ```
 
-拉完词表后重新 `install` 生效。
+拉取的词表写到 `~/.claude-localize/packs/`（用户目录），不会改动 app 包内部，
+重装也不会丢。拉完重新 `install` 生效。
 
 ## 自定义翻译
 
